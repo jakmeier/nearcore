@@ -194,6 +194,9 @@ impl RoutingTableActor {
                 for edge in edges {
                     for &peer_id in vec![&edge.key().0, &edge.key().1].iter() {
                         if peer_id != &my_peer_id
+                            // TODO(#5546): this check should be removed, in a separate PR
+                            // When we saved the component, we also saved the peer -> compoment mapping
+                            // We should delete all entries not to leak the memory
                             && !self.peer_last_time_reachable.contains_key(peer_id)
                             && !peers_in_component.contains(peer_id)
                         {
