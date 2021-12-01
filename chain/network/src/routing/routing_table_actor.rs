@@ -189,36 +189,36 @@ impl RoutingTableActor {
             let mut update = self.store.store_update();
 
             // Load all edges that were persisted in database in the cell - and add them to the current graph.
+            let mut peers_in_component = HashSet::new();
             if let Ok(edges) = self.get_and_remove_component_edges(component_nonce, &mut update) {
                 for edge in edges {
                     for &peer_id in vec![&edge.key().0, &edge.key().1].iter() {
-                        if peer_id == &my_peer_id
-                            || self.peer_last_time_reachable.contains_key(peer_id)
+                        if peer_id != &my_peer_id
+                            && !self.peer_last_time_reachable.contains_key(peer_id)
                         {
-                            continue;
-                        }
-
-                        // `edge = (peer_id, other_peer_id)` belongs to component that we loaded from database.
-                        if let Ok(cur_nonce) = self.component_nonce_from_peer(peer_id) {
-                            // If `peer_id` belongs to current component
-                            if cur_nonce == component_nonce {
-                                // Mark it as reachable and delete from database.
-                                self.peer_last_time_reachable
-                                    .insert(peer_id.clone(), Instant::now() - SAVE_PEERS_MAX_TIME);
-                                update.delete(
-                                    ColPeerComponent,
-                                    peer_id.try_to_vec().unwrap().as_ref(),
-                                );
-                            } else {
-                                warn!("We expected `peer_id` to belong to component {}, but it belongs to {}",
-                                       component_nonce, cur_nonce);
-                            }
-                        } else {
-                            warn!("We expected `peer_id` to belong to a component {}, but it doesn't belong anywhere",
-                                       component_nonce);
+                            peers_in_component.insert(peer_id.clone());
                         }
                     }
                     self.add_verified_edge(edge);
+                }
+                let now = Instant::now();
+                for peer_id in peers_in_component {
+                    // `edge = (peer_id, other_peer_id)` belongs to component that we loaded from database.
+                    if let Ok(cur_nonce) = self.component_nonce_from_peer(&peer_id) {
+                        // If `peer_id` belongs to current component
+                        if cur_nonce == component_nonce {
+                            // Mark it as reachable and delete from database.
+                            update.delete(ColPeerComponent, peer_id.try_to_vec().unwrap().as_ref());
+                            self.peer_last_time_reachable
+                                .insert(peer_id, now - SAVE_PEERS_MAX_TIME);
+                        } else {
+                            warn!("We expected `peer_id` to belong to component {}, but it belongs to {}",
+                                       component_nonce, cur_nonce);
+                        }
+                    } else {
+                        warn!("We expected `peer_id` to belong to a component {}, but it doesn't belong anywhere",
+                                       component_nonce);
+                    }
                 }
             }
 
