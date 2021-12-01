@@ -195,6 +195,7 @@ impl RoutingTableActor {
                     for &peer_id in vec![&edge.key().0, &edge.key().1].iter() {
                         if peer_id != &my_peer_id
                             && !self.peer_last_time_reachable.contains_key(peer_id)
+                            && !peers_in_component.contains(peer_id)
                         {
                             peers_in_component.insert(peer_id.clone());
                         }
@@ -202,6 +203,7 @@ impl RoutingTableActor {
                     self.add_verified_edge(edge);
                 }
                 let now = Instant::now();
+                // Remove all peers belonging to component.
                 for peer_id in peers_in_component {
                     // `edge = (peer_id, other_peer_id)` belongs to component that we loaded from database.
                     if let Ok(cur_nonce) = self.component_nonce_from_peer(&peer_id) {
