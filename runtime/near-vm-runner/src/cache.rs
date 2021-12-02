@@ -50,7 +50,7 @@ pub fn get_contract_cache_key(
 ) -> CryptoHash {
     let _span = tracing::debug_span!(target: "vm", "get_key").entered();
     let key = ContractCacheKey::Version4 {
-        code_hash: *code.hash(),
+        code_hash: code.hash().clone(),
         vm_config_non_crypto_hash: config.non_crypto_hash(),
         vm_kind,
         vm_hash: vm_hash(vm_kind),
