@@ -2,6 +2,7 @@ use crate::apply_chain_range::apply_chain_range;
 use crate::epoch_info;
 use crate::state_dump::state_dump;
 use ansi_term::Color::Red;
+use borsh::BorshDeserialize;
 use near_chain::chain::collect_receipts_from_response;
 use near_chain::migrations::check_if_block_is_first_with_chunk_of_version;
 use near_chain::types::{ApplyTransactionResult, BlockHeaderInfo};
@@ -15,6 +16,7 @@ use near_primitives::serialize::to_base;
 use near_primitives::shard_layout::ShardUId;
 use near_primitives::sharding::ChunkHash;
 use near_primitives::state_record::StateRecord;
+use near_primitives::transaction::{Action, SignedTransaction};
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::{BlockHeight, ShardId, StateRoot};
@@ -547,6 +549,32 @@ pub(crate) fn get_partial_chunk(
     let mut chain_store = ChainStore::new(store, near_config.genesis.config.genesis_height);
     let partial_chunk = chain_store.get_partial_chunk(&partial_chunk_hash);
     println!("Partial chunk: {:#?}", partial_chunk);
+}
+
+pub(crate) fn debug_tx(
+    _start_index: Option<BlockHeight>,
+    _end_index: Option<BlockHeight>,
+    _shard_id: ShardId,
+    _near_config: NearConfig,
+    store: Store,
+) {
+    let mut actions_skipped = 0u64;
+    let mut transactions = 0u64;
+    for (key, value) in store.iter(near_store::DBCol::ColTransactions) {
+        transactions+=1;
+        let hash = CryptoHash::try_from_slice(&key).unwrap();
+        let tx = SignedTransaction::try_from_slice(&value).unwrap();
+
+        for a in tx.transaction.actions {
+            if let Action::DeployContract(deploy_action) = a {
+                println!("Deploy code of size {}", deploy_action.code.len())
+            } else {
+                actions_skipped += 1;
+            }
+        }
+    }
+    println!("Processed {} transactions", transactions);
+    println!("Skipped {} actions that were not deployments", actions_skipped);
 }
 
 #[allow(unused)]

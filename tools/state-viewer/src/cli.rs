@@ -104,6 +104,8 @@ pub enum StateViewerSubCommand {
     Chunks(ChunksCmd),
     #[clap(name = "partial_chunks")]
     PartialChunks(PartialChunksCmd),
+    #[clap(name = "debug_tx")]
+    DebugTx(DebugTxCmd),
 }
 
 impl StateViewerSubCommand {
@@ -127,6 +129,7 @@ impl StateViewerSubCommand {
             StateViewerSubCommand::Receipts(cmd) => cmd.run(near_config, store),
             StateViewerSubCommand::Chunks(cmd) => cmd.run(near_config, store),
             StateViewerSubCommand::PartialChunks(cmd) => cmd.run(near_config, store),
+            StateViewerSubCommand::DebugTx(cmd) => cmd.run(near_config,store),
         }
     }
 }
@@ -358,3 +361,16 @@ impl PartialChunksCmd {
         get_partial_chunk(partial_chunk_hash, near_config, store)
     }
 }
+
+
+#[derive(Clap)]
+pub struct DebugTxCmd {
+}
+
+impl DebugTxCmd {
+    pub fn run(self, near_config: NearConfig, store: Store) {
+        debug_tx(None,None, 0, near_config, store)
+    }
+}
+
+
