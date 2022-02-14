@@ -2,7 +2,7 @@ use crate::apply_chain_range::apply_chain_range;
 use crate::epoch_info;
 use crate::state_dump::state_dump;
 use ansi_term::Color::Red;
-use borsh::BorshDeserialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use near_chain::chain::collect_receipts_from_response;
 use near_chain::migrations::check_if_block_is_first_with_chunk_of_version;
 use near_chain::types::{ApplyTransactionResult, BlockHeaderInfo};
@@ -12,6 +12,7 @@ use near_network::iter_peers_from_store;
 use near_primitives::account::id::AccountId;
 use near_primitives::block::BlockHeader;
 use near_primitives::hash::CryptoHash;
+use near_primitives::receipt::{Receipt, ReceiptEnum};
 use near_primitives::serialize::to_base;
 use near_primitives::shard_layout::ShardUId;
 use near_primitives::sharding::ChunkHash;
@@ -19,9 +20,9 @@ use near_primitives::state_record::StateRecord;
 use near_primitives::transaction::{Action, SignedTransaction};
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::chunk_extra::ChunkExtra;
-use near_primitives::types::{BlockHeight, ShardId, StateRoot};
+use near_primitives::types::{Balance, BlockHeight, ShardId, StateRoot};
 use near_store::test_utils::create_test_store;
-use near_store::{Store, TrieIterator};
+use near_store::{DBCol, Store, TrieIterator};
 use nearcore::{NearConfig, NightshadeRuntime};
 use node_runtime::adapter::ViewRuntimeAdapter;
 use std::collections::HashMap;
@@ -551,6 +552,12 @@ pub(crate) fn get_partial_chunk(
     println!("Partial chunk: {:#?}", partial_chunk);
 }
 
+#[derive(Default)]
+struct TxInfo {
+    code_sizes: Vec<usize>,
+    refund: Balance,
+}
+
 pub(crate) fn debug_tx(
     _start_index: Option<BlockHeight>,
     _end_index: Option<BlockHeight>,
@@ -558,23 +565,60 @@ pub(crate) fn debug_tx(
     _near_config: NearConfig,
     store: Store,
 ) {
-    let mut actions_skipped = 0u64;
-    let mut transactions = 0u64;
+    let mut actions_processed = 0u64;
+    let mut deploy_actions = 0u64;
+    let mut transactions_processed = 0u64;
+    let mut transactions = HashMap::<CryptoHash, TxInfo>::new();
     for (key, value) in store.iter(near_store::DBCol::ColTransactions) {
-        transactions+=1;
+        transactions_processed += 1;
         let hash = CryptoHash::try_from_slice(&key).unwrap();
         let tx = SignedTransaction::try_from_slice(&value).unwrap();
 
         for a in tx.transaction.actions {
             if let Action::DeployContract(deploy_action) = a {
-                println!("Deploy code of size {}", deploy_action.code.len())
-            } else {
-                actions_skipped += 1;
+                let size = deploy_action.code.len();
+                transactions.entry(hash).or_default().code_sizes.push(size);
+                eprintln!("Deploy code of size {size}");
+                deploy_actions += 1;
             }
+            actions_processed += 1;
         }
     }
-    println!("Processed {} transactions", transactions);
-    println!("Skipped {} actions that were not deployments", actions_skipped);
+    eprintln!("Processed {transactions_processed} transactions");
+    eprintln!("Processed {actions_processed} actions, {deploy_actions} of which are deployments");
+
+    eprintln!("Joining with outgoing receipts to find refund");
+    for (hash, info) in &mut transactions {
+        match store.get(DBCol::ColOutgoingReceipts, &hash.try_to_vec().unwrap()) {
+            Ok(Some(value)) => {
+                let outgoing = Vec::<Receipt>::try_from_slice(&value).unwrap();
+                for r in &outgoing {
+                    if let ReceiptEnum::Action(action_receipt) = &r.receipt {
+                        // Refund receipt has a single action, which is a transfer back to signer
+                        if action_receipt.actions.len() == 1
+                            && r.receiver_id == action_receipt.signer_id
+                        {
+                            if let Action::Transfer(ta) = &action_receipt.actions[0] {
+                                info.refund = ta.deposit;
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(None) => todo!(),
+            Err(_) => todo!(),
+        }
+    }
+
+    eprintln!("Printing CSV");
+    for (hash, info) in transactions {
+        let contracts = info.code_sizes.len();
+        let total_size = info.code_sizes.iter().sum::<usize>();
+        let refund = info.refund;
+        println!("{hash},{contracts},{total_size},{refund}");
+    }
+
+    eprintln!("Done");
 }
 
 #[allow(unused)]
