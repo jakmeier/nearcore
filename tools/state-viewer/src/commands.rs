@@ -611,7 +611,7 @@ pub(crate) fn debug_tx(
             }
             actions_processed += 1;
         }
-        if transactions_processed & 0xFFF0_0000 == 0 {
+        if transactions_processed & 0xF_FFFF == 0 {
             let n = transactions_processed >> 20;
             eprintln!("Processed {n}Mi transactions");
         }
@@ -644,7 +644,7 @@ pub(crate) fn debug_tx(
                 errors += 1;
             }
         }
-        if joined & 0xFFF0_0000 == 0 {
+        if joined & 0xF_FFFF == 0 {
             let n = joined >> 20;
             eprintln!("Joined {n}Mi transactions");
         }
