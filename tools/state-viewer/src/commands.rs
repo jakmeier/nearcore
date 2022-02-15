@@ -11,16 +11,19 @@ use near_epoch_manager::EpochManager;
 use near_network::iter_peers_from_store;
 use near_primitives::account::id::AccountId;
 use near_primitives::block::BlockHeader;
+use near_primitives::epoch_manager::block_info::BlockInfo;
+use near_primitives::epoch_manager::AllEpochConfig;
 use near_primitives::hash::CryptoHash;
 use near_primitives::receipt::{Receipt, ReceiptEnum};
 use near_primitives::serialize::to_base;
-use near_primitives::shard_layout::ShardUId;
+use near_primitives::shard_layout::{account_id_to_shard_id, ShardUId};
 use near_primitives::sharding::ChunkHash;
 use near_primitives::state_record::StateRecord;
 use near_primitives::transaction::{Action, SignedTransaction};
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::{Balance, BlockHeight, ShardId, StateRoot};
+use near_primitives::utils::get_block_shard_id;
 use near_store::test_utils::create_test_store;
 use near_store::{DBCol, Store, TrieIterator};
 use nearcore::{NearConfig, NightshadeRuntime};
@@ -554,6 +557,8 @@ pub(crate) fn get_partial_chunk(
 
 #[derive(Default)]
 struct TxInfo {
+    block_hash: CryptoHash,
+    deployment_shard: ShardId,
     code_sizes: Vec<usize>,
     refund: Balance,
 }
@@ -562,12 +567,15 @@ pub(crate) fn debug_tx(
     _start_index: Option<BlockHeight>,
     _end_index: Option<BlockHeight>,
     _shard_id: ShardId,
-    _near_config: NearConfig,
+    near_config: NearConfig,
     store: Store,
 ) {
+    let epoch_config = AllEpochConfig::from(&near_config.genesis.config);
+
     let mut actions_processed = 0u64;
     let mut deploy_actions = 0u64;
     let mut transactions_processed = 0u64;
+    let mut errors = 0u64;
     let mut transactions = HashMap::<CryptoHash, TxInfo>::new();
     for (key, value) in store.iter(near_store::DBCol::ColTransactions) {
         transactions_processed += 1;
@@ -576,20 +584,46 @@ pub(crate) fn debug_tx(
 
         for a in tx.transaction.actions {
             if let Action::DeployContract(deploy_action) = a {
-                let size = deploy_action.code.len();
-                transactions.entry(hash).or_default().code_sizes.push(size);
-                eprintln!("Deploy code of size {size}");
                 deploy_actions += 1;
+
+                let size = deploy_action.code.len();
+                eprintln!("Deploy code of size {size}");
+
+                let mut info = transactions.entry(hash).or_default();
+                info.code_sizes.push(size);
+
+                let block_hash = tx.transaction.block_hash;
+                if let Some(value) =
+                    store.get(DBCol::ColBlockInfo, &block_hash.try_to_vec().unwrap()).unwrap()
+                {
+                    let block_info = BlockInfo::try_from_slice(&value).unwrap();
+                    let protocol_version = block_info.latest_protocol_version();
+                    let shard_layout =
+                        &epoch_config.for_protocol_version(*protocol_version).shard_layout;
+
+                    info.block_hash = block_hash;
+                    info.deployment_shard =
+                        account_id_to_shard_id(&tx.transaction.receiver_id, shard_layout);
+                } else {
+                    eprintln!("Block {block_hash} missing in DB");
+                    errors += 1;
+                }
             }
             actions_processed += 1;
+        }
+        if transactions_processed & 0xFFF0_0000 == 0 {
+            let n = transactions_processed >> 20;
+            eprintln!("Processed {n}Mi transactions");
         }
     }
     eprintln!("Processed {transactions_processed} transactions");
     eprintln!("Processed {actions_processed} actions, {deploy_actions} of which are deployments");
 
     eprintln!("Joining with outgoing receipts to find refund");
-    for (hash, info) in &mut transactions {
-        match store.get(DBCol::ColOutgoingReceipts, &hash.try_to_vec().unwrap()) {
+    let mut joined = 0u64;
+    for (_tx_hash, info) in &mut transactions {
+        let outgoing_receipts_key = get_block_shard_id(&info.block_hash, info.deployment_shard);
+        match store.get(DBCol::ColOutgoingReceipts, &outgoing_receipts_key) {
             Ok(Some(value)) => {
                 let outgoing = Vec::<Receipt>::try_from_slice(&value).unwrap();
                 for r in &outgoing {
@@ -600,15 +634,22 @@ pub(crate) fn debug_tx(
                         {
                             if let Action::Transfer(ta) = &action_receipt.actions[0] {
                                 info.refund = ta.deposit;
+                                joined += 1;
                             }
                         }
                     }
                 }
             }
-            Ok(None) => todo!(),
-            Err(_) => todo!(),
+            Ok(None) | Err(_) => {
+                errors += 1;
+            }
+        }
+        if joined & 0xFFF0_0000 == 0 {
+            let n = joined >> 20;
+            eprintln!("Joined {n}Mi transactions");
         }
     }
+    eprintln!("{errors} deployments had missing ");
 
     eprintln!("Printing CSV");
     for (hash, info) in transactions {
