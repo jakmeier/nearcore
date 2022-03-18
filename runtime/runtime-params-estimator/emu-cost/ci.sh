@@ -19,6 +19,6 @@ mkdir /tmp/data
 cargo build --release --package runtime-params-estimator --features required
 ./emu-cost/counter_plugin/qemu-x86_64 -cpu Westmere-v1 -plugin file=./emu-cost/counter_plugin/libcounter.so ../../target/release/runtime-params-estimator --home /tmp/data --additional-accounts-num=200000 --accounts-num 20000 --iters 1 --warmup-iters 1
 
-../../target/release/runtime-params-estimator --home /tmp/data --costs_file costs*.txt
+../../target/release/runtime-params-estimator --home /tmp/data --costs-file costs*.txt
 cp /tmp/data/runtime_config.json /host/${srcdir}
 "
