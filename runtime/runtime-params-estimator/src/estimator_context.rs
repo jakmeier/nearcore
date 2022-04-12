@@ -1,6 +1,7 @@
-use near_primitives::hash::{hash, CryptoHash};
+use near_primitives::hash::hash;
 use near_primitives::shard_layout::ShardUId;
-use rand::prelude::SliceRandom;
+use rand::Rng;
+use rand::prelude::IteratorRandom;
 use std::collections::HashMap;
 
 use near_primitives::transaction::SignedTransaction;
@@ -115,14 +116,21 @@ impl<'c> Testbed<'c> {
         &mut self,
         iters: usize,
     ) -> Vec<(GasCost, HashMap<ExtCosts, u64>)> {
-        (0..iters)
-            .map(|_| {
+        // Prepare some dummy data to read later
+        let buf_size = 256 * 1024 * 1024;
+        let mut buffer = Vec::with_capacity(buf_size);
+        buffer.extend(std::iter::repeat_with(|| rand::thread_rng().gen::<u8>()).take(buf_size));
+        let mut output_s = String::new();
+        let results = (0..iters)
+            .map(|i| {
                 let tb = self.transaction_builder();
 
-                let num_values: usize = 100;
+                let num_values_total: usize = 100_000;
+                let num_values_sampled: usize = 100;
                 let value_len: usize = 2000;
                 let signer = tb.random_account();
-                let values: Vec<_> = (0..num_values)
+                let mut rng = rand::thread_rng();
+                let values: Vec<_> = (0..num_values_total)
                     .map(|_| {
                         let v = tb.random_vec(value_len);
                         let h = hash(&v);
@@ -130,16 +138,16 @@ impl<'c> Testbed<'c> {
                         let node_with_size = RawTrieNodeWithSize { node, memory_usage: 1 };
                         node_with_size.encode().unwrap()
                     })
-                    .collect();
+                    .choose_multiple(&mut rng, num_values_sampled);
                 let mut setup_block = Vec::new();
                 for (i, value) in values.iter().cloned().enumerate() {
-                    let key = vec![i as u8];
+                    let key = i.to_ne_bytes().to_vec();
                     setup_block.push(tb.account_insert_key_bytes(signer.clone(), key, value));
                 }
 
                 let value_hashes: Vec<_> = values.iter().map(|value| hash(value)).collect();
 
-                let mut blocks = vec![setup_block];
+                let blocks = vec![setup_block];
                 self.measure_blocks(blocks, 0);
 
                 let store = self.inner.store();
@@ -150,6 +158,10 @@ impl<'c> Testbed<'c> {
                 let results: Vec<_> = (0..2)
                     .map(|_| {
                         self.clear_caches();
+                        // Now fill all CPU caches with random data, forcing a read of the entire prepared buffer.
+                        let n = buffer.iter().filter(|n| **n == i as u8).count();
+                        output_s.extend(n.to_string().chars());
+                        output_s.push(' ');
                         let start = GasCost::measure(self.config.metric);
                         let sum: usize = value_hashes
                             .iter()
@@ -164,7 +176,7 @@ impl<'c> Testbed<'c> {
                                 }
                             })
                             .sum();
-                        assert_eq!(sum, num_values * value_len);
+                        assert_eq!(sum, num_values_sampled * value_len);
                         (start.elapsed(), HashMap::new())
                     })
                     .collect();
@@ -175,7 +187,11 @@ impl<'c> Testbed<'c> {
 
                 results[results.len() - 1].clone()
             })
-            .collect()
+            .collect();
+
+        // Use the result to be sure nothing is optimized.
+        eprintln!("output: {output_s}");
+        results
     }
 
     fn clear_caches(&mut self) {
