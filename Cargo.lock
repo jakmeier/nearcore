@@ -4806,6 +4806,7 @@ dependencies = [
  "serde_json",
  "sha256",
  "tempfile",
+ "tracing",
  "tracing-span-tree",
  "tracing-subscriber",
  "walrus",
@@ -5810,12 +5811,15 @@ dependencies = [
  "lazy_static",
  "matchers",
  "regex",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]

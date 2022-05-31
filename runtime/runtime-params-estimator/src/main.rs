@@ -199,12 +199,17 @@ fn main() -> anyhow::Result<()> {
     if cli_args.tracing_span_tree {
         tracing_span_tree::span_tree().enable();
     } else {
-        use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
-            .with(tracing_subscriber::EnvFilter::from_default_env())
-            .init();
+        // use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+        // use tracing_subscriber::util::SubscriberInitExt;
+        // tracing_subscriber::registry()
+        //     .with(tracing_subscriber::fmt::layer())
+        //     .with(tracing_subscriber::EnvFilter::from_default_env())
+        //     .init();
+        let subscriber =
+            tracing_subscriber::fmt::fmt().with_max_level(tracing::Level::TRACE).json().finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
     }
 
     let warmup_iters_per_block = cli_args.warmup_iters;
