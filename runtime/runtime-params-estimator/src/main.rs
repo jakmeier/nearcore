@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::time;
+use tracing::metadata::LevelFilter;
 
 #[derive(Parser)]
 struct CliArgs {
@@ -199,14 +200,25 @@ fn main() -> anyhow::Result<()> {
     if cli_args.tracing_span_tree {
         tracing_span_tree::span_tree().enable();
     } else {
-        // use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
-        // use tracing_subscriber::util::SubscriberInitExt;
+        use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+        use tracing_subscriber::Layer;
         // tracing_subscriber::registry()
         //     .with(tracing_subscriber::fmt::layer())
         //     .with(tracing_subscriber::EnvFilter::from_default_env())
         //     .init();
-        let subscriber =
-            tracing_subscriber::fmt::fmt().with_max_level(tracing::Level::TRACE).json().finish();
+        // let subscriber =
+        //     tracing_subscriber::fmt::fmt().with_max_level(tracing::Level::TRACE).json().finish();
+
+        let log_file = std::sync::Mutex::new(fs::File::create("my_cool_trace.json")?);
+        let stdout_log = tracing_subscriber::fmt::layer().pretty().with_filter(LevelFilter::INFO);
+        let io_layer = tracing_subscriber::fmt::layer().json().with_writer(log_file).with_filter(
+            tracing_subscriber::filter::filter_fn(|metadata| {
+                metadata.target() == "store" || metadata.target() == "vm"
+            }),
+        );
+        // let io_layer = IoTraceLayer {};
+        let subscriber = tracing_subscriber::registry().with(io_layer).with(stdout_log);
 
         tracing::subscriber::set_global_default(subscriber)
             .expect("setting default subscriber failed");
@@ -410,3 +422,88 @@ fn project_root() -> PathBuf {
     assert!(res.join(".github").exists());
     res
 }
+
+// use io_trace::*;
+// mod io_trace {
+//     use tracing::{span, Subscriber};
+//     use tracing_subscriber::Layer;
+
+//     pub struct IoTraceLayer {
+//         // block: Option<span::Id>,
+//         // tx: Option<span::Id>,
+//         // fn_call: Option<span::Id>,
+//         // blocks: HashMap<span::Id, String>,
+//         // txs: HashMap<span::Id, String>,
+//         // fn_calls: HashMap<span::Id, FnCallInfo>,
+//     }
+
+//     // struct Block {
+//     //     tx: Vec<Tx>,
+//     // }
+//     // struct Tx {
+
+//     // }
+
+//     struct IoEvent {
+//         op: Option<String>,
+//     }
+//     // pub enum IoEventType {
+//     //     Read,
+//     //     Write,
+//     //     C
+//     // }
+
+//     impl<S: Subscriber> Layer<S> for IoTraceLayer {
+//         fn on_new_span(
+//             &self,
+//             attrs: &span::Attributes<'_>,
+//             id: &span::Id,
+//             ctx: tracing_subscriber::layer::Context<'_, S>,
+//         ) {
+//             let _ = (attrs, id, ctx);
+//         }
+
+//         fn on_record(
+//             &self,
+//             _span: &span::Id,
+//             _values: &span::Record<'_>,
+//             _ctx: tracing_subscriber::layer::Context<'_, S>,
+//         ) {
+//         }
+
+//         fn on_event(
+//             &self,
+//             event: &tracing::Event<'_>,
+//             ctx: tracing_subscriber::layer::Context<'_, S>,
+//         ) {
+//             if let Some(io_op) = event.metadata().fields().field("io_op") {
+//                 let mut output = IoEvent { op: None };
+//                 let mut visitor = IoEventVisitor { output: &mut output };
+//                 event.record(&mut visitor);
+//                 println!("{}", output.op.unwrap());
+//             }
+//         }
+
+//         fn on_enter(&self, _id: &span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {}
+
+//         fn on_exit(&self, _id: &span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {}
+
+//         fn on_close(&self, _id: span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {}
+//     }
+
+//     struct IoEventVisitor<'a> {
+//         output: &'a mut IoEvent,
+//     }
+
+//     impl<'a> tracing::field::Visit for IoEventVisitor<'a> {
+//         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+//             if field.name() == "io_op" {
+//                 self.output.op = Some(value.to_owned());
+//             }
+//         }
+
+//         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+//             self.record_str(field, &format!("{value:?}"))
+//         }
+//     }
+// }
