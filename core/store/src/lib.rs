@@ -78,7 +78,7 @@ impl Store {
 
     pub fn get(&self, column: DBCol, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
         let value = self.storage.get(column, key).map_err(io::Error::from)?;
-        tracing::trace!(target: "store", io_op = "get", col = ?column, key = %to_base(key), size = ?value.as_ref().map(Vec::len));
+        tracing::trace!(target: "store", db_op = "get", col = ?column, key = %to_base(key), size = ?value.as_ref().map(Vec::len));
         Ok(value)
     }
 
@@ -317,19 +317,19 @@ impl StoreUpdate {
         for op in &self.transaction.ops {
             match op {
                 DBOp::Insert { col, key, value } => {
-                    tracing::trace!(target: "store", io_op = "insert", col = ?col, key =  %to_base(key), size= value.len())
+                    tracing::trace!(target: "store", db_op = "insert", col = ?col, key =  %to_base(key), size= value.len())
                 }
                 DBOp::Set { col, key, value } => {
-                    tracing::trace!(target: "store", io_op = "set", col = ?col, key =  %to_base(key), size= value.len())
+                    tracing::trace!(target: "store", db_op = "set", col = ?col, key =  %to_base(key), size= value.len())
                 }
                 DBOp::UpdateRefcount { col, key, value } => {
-                    tracing::trace!(target: "store", io_op = "update_rc", col = ?col, key =  %to_base(key), size= value.len())
+                    tracing::trace!(target: "store", db_op = "update_rc", col = ?col, key =  %to_base(key), size= value.len())
                 }
                 DBOp::Delete { col, key } => {
-                    tracing::trace!(target: "store", io_op = "deleted", col = ?col, key =  %to_base(key))
+                    tracing::trace!(target: "store", db_op = "deleted", col = ?col, key =  %to_base(key))
                 }
                 DBOp::DeleteAll { col } => {
-                    tracing::trace!(target: "store", io_op = "delete_all", col = ?col)
+                    tracing::trace!(target: "store", db_op = "delete_all", col = ?col)
                 }
             }
         }

@@ -6,11 +6,12 @@ use clap::Parser;
 use once_cell::sync::OnceCell;
 use opentelemetry::sdk::trace::{self, IdGenerator, Sampler, Tracer};
 use std::borrow::Cow;
+use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;
 use tracing_appender::non_blocking::NonBlocking;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::filter::{Filtered, ParseError};
-use tracing_subscriber::fmt::format::{DefaultFields, Format};
+use tracing_subscriber::fmt::format::{DefaultFields, Format, JsonFields};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::reload::{Error, Handle};
@@ -69,6 +70,10 @@ pub struct Options {
     /// Whether the log needs to be colored.
     #[clap(long, arg_enum, default_value = "auto")]
     color: ColorOutput,
+
+    /// Enable JSON output of IO events, written to a file.
+    #[clap(long)]
+    record_io_trace: Option<PathBuf>,
 }
 
 impl<S: tracing::Subscriber + Send + Sync> DefaultSubscriberGuard<S> {
@@ -167,6 +172,33 @@ where
     layer
 }
 
+/// The constructed layer writes storage and DB events in JSON format to a
+/// specified file.
+///
+/// This layer is useful to collect detailed IO access patterns for block
+/// production. Typically used for debugging IO.
+pub fn make_io_tracing_layer<S>(
+    writer: std::sync::Mutex<std::fs::File>,
+) -> Filtered<
+    tracing_subscriber::fmt::Layer<
+        S,
+        JsonFields,
+        tracing_subscriber::fmt::format::Format<tracing_subscriber::fmt::format::Json>,
+        std::sync::Mutex<std::fs::File>,
+    >,
+    EnvFilter,
+    S,
+>
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+{
+    tracing_subscriber::fmt::layer().json().with_writer(writer).with_filter(
+        tracing_subscriber::filter::EnvFilter::new(
+            "store=trace,vm_logic=trace,host-function=trace",
+        ),
+    )
+}
+
 /// Run the code with a default subscriber set to the option appropriate for the NEAR code.
 ///
 /// This will override any subscribers set until now, and will be in effect until the value
@@ -201,9 +233,17 @@ pub async fn default_subscriber(
     let (log_layer, handle) = tracing_subscriber::reload::Layer::new(log_layer);
     LOG_LAYER_RELOAD_HANDLE.set(handle).unwrap();
 
+    let io_trace_layer = options.record_io_trace.as_ref().map(|output_path| {
+        make_io_tracing_layer(std::sync::Mutex::new(
+            std::fs::File::create(output_path)
+                .expect("unable to create or truncate IO trace output file"),
+        ))
+    });
+
     let subscriber = tracing_subscriber::registry();
     let subscriber = subscriber.with(log_layer);
     let subscriber = subscriber.with(make_opentelemetry_layer(options).await);
+    let subscriber = subscriber.with(io_trace_layer);
 
     DefaultSubscriberGuard {
         subscriber: Some(subscriber),

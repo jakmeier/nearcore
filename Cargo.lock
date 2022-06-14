@@ -4792,6 +4792,7 @@ dependencies = [
  "libc",
  "near-chain-configs",
  "near-crypto",
+ "near-o11y",
  "near-primitives",
  "near-store",
  "near-vm-logic",
