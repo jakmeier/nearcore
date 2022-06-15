@@ -33,97 +33,94 @@ enum DbOp {
 
 /// Formatted but not-yet printed output lines.
 ///
-/// Some operations are bundled together and only printed after the enclosing
-/// span exits. This allows to print span information before the operations that
-/// happen within.
+/// Events are bundled together and only printed after the enclosing span exits.
+/// This allows to print information at the tpo that is only available later on.
 ///
 /// Note: Type used as key in `AnyMap` inside span extensions.
-struct OutputBuffer(Vec<String>);
+struct OutputBuffer(Vec<BufferedLine>);
 
-/// Keeps track of current indentation when printing output.
-///
-/// Note: Type used as key in `AnyMap` inside span extensions.
-struct IndentationDepth(usize);
+/// Formatted but not-yet printed output line.
+struct BufferedLine {
+    indent: usize,
+    output_line: String,
+}
+
+/// Information added to a span through events happening within.
+struct SpanInfo(Vec<String>);
 
 impl<S: Subscriber + for<'span> LookupSpan<'span>> Layer<S> for IoTraceLayer {
     fn on_enter(&self, id: &span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
         let span = ctx.span(id).unwrap();
-        let name = span.name();
-        let indent = if span.parent().is_none() {
-            0
-        } else {
-            span.extensions().get::<IndentationDepth>().unwrap().0
-        };
-
-        // Most spans are written out directly, since they are only printed to
-        // display control-flow progress in the output. Storage related host
-        // functions are more important. They have the key and the value size
-        // printed in the opening line. But the size is only available later.
-        // Therefore, output within those spans is buffered. Note that one layer
-        // of buffering is enough because no spans are created deeper inside
-        // those host functions.
-        match name {
-            "storage_read" | "storage_write" | "storage_remove" | "storage_has_key" => {
-                span.extensions_mut().replace(OutputBuffer(vec![]));
-            }
-            _ => {
-                writeln!(self.file.lock().unwrap(), "{:indent$}{name}", "").unwrap();
-            }
-        }
-
-        let new_depth = IndentationDepth(indent + 2);
-        span.extensions_mut().replace(new_depth);
+        span.extensions_mut().replace(OutputBuffer(vec![]));
+        span.extensions_mut().replace(SpanInfo(vec![]));
     }
 
     fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         let mut visitor = IoEventVisitor::default();
         event.record(&mut visitor);
 
-        let indent = ctx
-            .event_span(event)
-            .and_then(|span| span.extensions().get::<IndentationDepth>().map(|d| d.0))
-            .unwrap_or(0);
-
-        match visitor.t {
+         match visitor.t {
             Some(IoEventType::DbOp(db_op)) => {
                 let col = visitor.col.as_deref().unwrap_or("?");
                 let key = visitor.key.as_deref().unwrap_or("?");
                 let size = visitor.size.map(|num| num.to_string());
-                let formatted_size = size.as_deref().unwrap_or("-");
-                let output_line = format!("{db_op} {col} {key:?} size={formatted_size}");
-
+                let formatted_size = size.as_deref().unwrap_or("-");let output_line =
+                format!("{db_op} {col} {key:?} size={formatted_size}");
                 if let Some(span) = ctx.event_span(event) {
-                    if let Some(OutputBuffer(stack)) = span.extensions_mut().get_mut() {
-                        stack.push(output_line);
-                        return;
-                    }
+                    span.extensions_mut().get_mut::<OutputBuffer>().unwrap().0.push(BufferedLine { indent: 2, output_line });
+                    
+                } else {
+                    // Print top level unbuffered.
+                    writeln!(self.file.lock().unwrap(), "{output_line}").unwrap();
                 }
 
-                writeln!(self.file.lock().unwrap(), "{:indent$}{output_line}", "").unwrap();
-            }
+            },
             Some(IoEventType::StorageOp(storage_op)) => {
                 let key = visitor.key.as_deref().unwrap_or("?");
                 let size = visitor.size.map(|num| num.to_string());
                 let formatted_size = size.as_deref().unwrap_or("-");
                 let tn_db_reads = visitor.tn_db_reads.unwrap();
                 let tn_mem_reads = visitor.tn_mem_reads.unwrap();
-                writeln!(
-                    self.file.lock().unwrap(),
-                    "{:indent$}{storage_op} {key:?} size={formatted_size} tn_db_reads={tn_db_reads} tn_mem_reads={tn_mem_reads}",
-                    ""
-                )
-                .unwrap();
 
-                let span = ctx.event_span(event).expect("must have a parent span").id();
-                self.flush_output_buffer(&span, &ctx, indent + 2);
+                let span_info = 
+                format!("{storage_op} key={key} size={formatted_size} tn_db_reads={tn_db_reads} tn_mem_reads={tn_mem_reads}");
+                
+                let span = ctx.event_span(event).expect("storage operations must happen inside span");
+                    span.extensions_mut().get_mut::<SpanInfo>().unwrap().0.push(span_info);
             }
-            None => { /* Ignore irrelevant tracing events. */ }
+            None => {
+                // Ignore irrelevant tracing events.
+                return;
+            }
         }
     }
 
     fn on_exit(&self, id: &span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
         let span = ctx.span(id).unwrap();
-        span.extensions_mut().get_mut::<IndentationDepth>().unwrap().0 -= 2;
+        let name = span.name();
+        let span_line = {
+            let span_info = span.extensions_mut().replace(SpanInfo(vec![])).unwrap();
+            format!("{name} {}", span_info.0.join(" "))
+        };
+
+        let OutputBuffer(mut exiting_buffer) =
+            span.extensions_mut().replace(OutputBuffer(vec![])).unwrap();
+
+        if let Some(parent) = span.parent() {
+            let mut ext = parent.extensions_mut();
+            let OutputBuffer(parent_buffer) = ext.get_mut().unwrap();
+            parent_buffer.push(BufferedLine { indent: 2, output_line: span_line });
+            parent_buffer.extend(exiting_buffer.drain(..).map(|mut line| {
+                line.indent += 2;
+                line
+            }));
+        } else {
+            let mut out = self.file.lock().unwrap();
+            writeln!(out, "{span_line}").unwrap();
+            for BufferedLine { indent, output_line } in exiting_buffer.drain(..) {
+                writeln!(out, "{:indent$}{output_line}", "").unwrap();
+            }
+        }
     }
 
     fn on_close(&self, _id: span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {}
@@ -132,22 +129,6 @@ impl<S: Subscriber + for<'span> LookupSpan<'span>> Layer<S> for IoTraceLayer {
 impl IoTraceLayer {
     pub fn new(file: Mutex<File>) -> Self {
         Self { file }
-    }
-
-    /// Remove and print all DB operations of the current span.
-    fn flush_output_buffer<S: Subscriber + for<'span> LookupSpan<'span>>(
-        &self,
-        id: &span::Id,
-        ctx: &tracing_subscriber::layer::Context<'_, S>,
-        indent: usize,
-    ) {
-        let span = ctx.span(id).unwrap();
-        let mut ext = span.extensions_mut();
-        let buffer = ext.get_mut::<OutputBuffer>().expect("span must have db op stack");
-        let mut out = self.file.lock().unwrap();
-        for line in buffer.0.drain(..) {
-            writeln!(out, "{:indent$}{line}", "").unwrap();
-        }
     }
 }
 
