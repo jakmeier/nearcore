@@ -42,22 +42,32 @@ impl<S: Subscriber + for<'span> LookupSpan<'span>> Layer<S> for IoTraceLayer {
 
         match visitor.t {
             Some(IoEventType::DbOp(db_op)) => {
-                let span = ctx.event_span(event).expect("must have a parent span");
-                span.extensions_mut()
-                    .get_mut::<DbOpStack>()
-                    .expect("span must have db op stack")
-                    .push(db_op);
+                if let Some(span) = ctx.event_span(event) {
+                    span.extensions_mut()
+                        .get_mut::<DbOpStack>()
+                        .expect("span must have db op stack")
+                        .push(db_op);
+                } else {
+                    let col = visitor.col.as_deref().unwrap_or("_");
+                    let key = visitor.key.as_deref().unwrap_or("?");
+                    let size = visitor.size.map(|num| num.to_string());
+                    let formatted_size = size.as_deref().unwrap_or("-");
+                    // GET State "3t9dCaQAfpnBq1mmHmvszYZvpLSDDYc5q2sbPycDqvRmEhozbxSwtm" 75   TrieNode
+                    writeln!(self.file.lock().unwrap(), "{db_op} {col} {key:?} {formatted_size}",)
+                        .unwrap();
+                }
             }
             Some(IoEventType::StorageOp(storage_op)) => {
                 let level = 1; // TODO
                 let indent = level * 2;
-                let col = visitor.col.as_deref().unwrap_or("_");
                 let key = visitor.key.as_deref().unwrap_or("?");
                 let size = visitor.size.map(|num| num.to_string());
                 let formatted_size = size.as_deref().unwrap_or("-");
+                // TODO: more info
+                // storage_read "AQH2oEL" 29 tn_db_reads=16 tn_mem_reads=0 time=27ms
                 writeln!(
                     self.file.lock().unwrap(),
-                    "{:indent$}{storage_op} {col} {key} {formatted_size}",
+                    "{:indent$}{storage_op} {key:?} {formatted_size}",
                     ""
                 )
                 .unwrap();
@@ -96,7 +106,6 @@ impl IoTraceLayer {
         for db_op in db_ops.drain(..) {
             let level = 1; // TODO
                            // TODO: More info
-                           // GET State "3t9dCaQAfpnBq1mmHmvszYZvpLSDDYc5q2sbPycDqvRmEhozbxSwtm" 75   TrieNode
             let indent = level * 2;
             writeln!(out, "{:indent$}{db_op}", "").unwrap();
         }
