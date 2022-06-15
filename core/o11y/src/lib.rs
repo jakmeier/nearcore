@@ -3,6 +3,7 @@
 pub use {backtrace, tracing, tracing_appender, tracing_subscriber};
 
 use clap::Parser;
+use io_tracer::IoTraceLayer;
 use once_cell::sync::OnceCell;
 use opentelemetry::sdk::trace::{self, IdGenerator, Sampler, Tracer};
 use std::borrow::Cow;
@@ -11,11 +12,14 @@ use tracing::level_filters::LevelFilter;
 use tracing_appender::non_blocking::NonBlocking;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::filter::{Filtered, ParseError};
-use tracing_subscriber::fmt::format::{DefaultFields, Format, JsonFields};
+use tracing_subscriber::fmt::format::{DefaultFields, Format};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::reload::{Error, Handle};
 use tracing_subscriber::{EnvFilter, Layer, Registry};
+
+/// Custom tracing subscriber implementation that produces IO traces.
+mod io_tracer;
 
 static LOG_LAYER_RELOAD_HANDLE: OnceCell<
     Handle<
@@ -179,24 +183,13 @@ where
 /// production. Typically used for debugging IO.
 pub fn make_io_tracing_layer<S>(
     writer: std::sync::Mutex<std::fs::File>,
-) -> Filtered<
-    tracing_subscriber::fmt::Layer<
-        S,
-        JsonFields,
-        tracing_subscriber::fmt::format::Format<tracing_subscriber::fmt::format::Json>,
-        std::sync::Mutex<std::fs::File>,
-    >,
-    EnvFilter,
-    S,
->
+) -> Filtered<IoTraceLayer, EnvFilter, S>
 where
     S: tracing::Subscriber + for<'span> LookupSpan<'span>,
 {
-    tracing_subscriber::fmt::layer().json().with_writer(writer).with_filter(
-        tracing_subscriber::filter::EnvFilter::new(
-            "store=trace,vm_logic=trace,host-function=trace",
-        ),
-    )
+    IoTraceLayer::new(writer).with_filter(tracing_subscriber::filter::EnvFilter::new(
+        "store=trace,vm_logic=trace,host-function=trace,runtime=debug",
+    ))
 }
 
 /// Run the code with a default subscriber set to the option appropriate for the NEAR code.

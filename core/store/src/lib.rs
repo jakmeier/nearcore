@@ -326,7 +326,7 @@ impl StoreUpdate {
                     tracing::trace!(target: "store", db_op = "update_rc", col = ?col, key =  %to_base(key), size= value.len())
                 }
                 DBOp::Delete { col, key } => {
-                    tracing::trace!(target: "store", db_op = "deleted", col = ?col, key =  %to_base(key))
+                    tracing::trace!(target: "store", db_op = "delete", col = ?col, key =  %to_base(key))
                 }
                 DBOp::DeleteAll { col } => {
                     tracing::trace!(target: "store", db_op = "delete_all", col = ?col)

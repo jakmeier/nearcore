@@ -210,7 +210,7 @@ fn main() -> anyhow::Result<()> {
             let log_file = Mutex::new(
                 File::create(path).expect("unable to create or truncate IO trace output file"),
             );
-            near_o11y::make_io_tracing_layer(log_file.into())
+            near_o11y::make_io_tracing_layer(log_file)
         });
         let subscriber = tracing_subscriber::registry().with(log_layer).with(io_layer);
 

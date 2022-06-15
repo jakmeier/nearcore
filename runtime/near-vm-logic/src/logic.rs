@@ -2348,7 +2348,7 @@ impl<'a> VMLogic<'a> {
 
         tracing::trace!(
             target: "vm_logic",
-            storage_op = "storage_write",
+            storage_op = "write",
             key =  %near_primitives::serialize::to_base(key.clone()),
             size=value_len,
             evicted_len=evicted.as_ref().map(Vec::len),
@@ -2440,7 +2440,7 @@ impl<'a> VMLogic<'a> {
 
         tracing::trace!(
             target: "vm_logic",
-            storage_op = "storage_read",
+            storage_op = "read",
             key =  %near_primitives::serialize::to_base(key.clone()),
             size=read.as_ref().map(Vec::len),
             trie_nodes = %nodes_delta_string
