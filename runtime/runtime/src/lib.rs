@@ -1269,7 +1269,7 @@ impl Runtime {
                 receipt_id = %receipt.receipt_id,
                 node_counter = ?state_update.trie.get_trie_nodes_count())
             .entered();
-            tracing::trace!(target: "io_tracer", predecessor = %receipt.predecessor_id, receiver = %receipt.receiver_id);
+            tracing::trace!(target: "io_tracer", predecessor = %receipt.predecessor_id, receiver = %receipt.receiver_id, id = %receipt.receipt_id);
             let result = self.process_receipt(
                 state_update,
                 apply_state,
