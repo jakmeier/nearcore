@@ -317,13 +317,13 @@ impl StoreUpdate {
         for op in &self.transaction.ops {
             match op {
                 DBOp::Insert { col, key, value } => {
-                    tracing::trace!(target: "store", db_op = "insert", col = ?col, key =  %to_base(key), size= value.len())
+                    tracing::trace!(target: "store", db_op = "insert", col = ?col, key =  %to_base(key), size = value.len())
                 }
                 DBOp::Set { col, key, value } => {
-                    tracing::trace!(target: "store", db_op = "set", col = ?col, key =  %to_base(key), size= value.len())
+                    tracing::trace!(target: "store", db_op = "set", col = ?col, key =  %to_base(key), size = value.len())
                 }
                 DBOp::UpdateRefcount { col, key, value } => {
-                    tracing::trace!(target: "store", db_op = "update_rc", col = ?col, key =  %to_base(key), size= value.len())
+                    tracing::trace!(target: "store", db_op = "update_rc", col = ?col, key =  %to_base(key), size = value.len())
                 }
                 DBOp::Delete { col, key } => {
                     tracing::trace!(target: "store", db_op = "delete", col = ?col, key =  %to_base(key))

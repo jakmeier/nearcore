@@ -171,14 +171,16 @@ impl tracing::field::Visit for IoEventVisitor {
                 };
                 self.t = Some(IoEventType::StorageOp(op));
             }
+            // GET operation has uses a `Debug` printed `Option<usize>` for size.
+            "size" => self.size = value.parse().ok(),
             "db_op" => {
                 let op = match value {
                     "get" => DbOp::Get,
                     "insert" => DbOp::Insert,
                     "set" => DbOp::Set,
-                    "updaterc" => DbOp::UpdateRc,
+                    "update_rc" => DbOp::UpdateRc,
                     "delete" => DbOp::Delete,
-                    "deleteall" => DbOp::DeleteAll,
+                    "delete_all" => DbOp::DeleteAll,
                     _ => DbOp::Other,
                 };
                 self.t = Some(IoEventType::DbOp(op));
