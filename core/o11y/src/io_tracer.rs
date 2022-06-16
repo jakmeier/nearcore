@@ -56,42 +56,15 @@ impl<S: Subscriber + for<'span> LookupSpan<'span>> Layer<S> for IoTraceLayer {
     }
 
     fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
-        let mut visitor = IoEventVisitor::default();
-        event.record(&mut visitor);
-
-         match visitor.t {
-            Some(IoEventType::DbOp(db_op)) => {
-                let col = visitor.col.as_deref().unwrap_or("?");
-                let key = visitor.key.as_deref().unwrap_or("?");
-                let size = visitor.size.map(|num| num.to_string());
-                let formatted_size = size.as_deref().unwrap_or("-");let output_line =
-                format!("{db_op} {col} {key:?} size={formatted_size}");
-                if let Some(span) = ctx.event_span(event) {
-                    span.extensions_mut().get_mut::<OutputBuffer>().unwrap().0.push(BufferedLine { indent: 2, output_line });
-                    
-                } else {
-                    // Print top level unbuffered.
-                    writeln!(self.file.lock().unwrap(), "{output_line}").unwrap();
-                }
-
-            },
-            Some(IoEventType::StorageOp(storage_op)) => {
-                let key = visitor.key.as_deref().unwrap_or("?");
-                let size = visitor.size.map(|num| num.to_string());
-                let formatted_size = size.as_deref().unwrap_or("-");
-                let tn_db_reads = visitor.tn_db_reads.unwrap();
-                let tn_mem_reads = visitor.tn_mem_reads.unwrap();
-
-                let span_info = 
-                format!("{storage_op} key={key} size={formatted_size} tn_db_reads={tn_db_reads} tn_mem_reads={tn_mem_reads}");
-                
-                let span = ctx.event_span(event).expect("storage operations must happen inside span");
-                    span.extensions_mut().get_mut::<SpanInfo>().unwrap().0.push(span_info);
+        if event.metadata().target() == "io_tracer" {
+            // Events specifically added to add more info to spans in IO Tracer.
+            // Marked with `target: "io_tracer"`.
+            if let Some(span) = ctx.event_span(event) {
+                event.record(span.extensions_mut().get_mut::<SpanInfo>().unwrap());
             }
-            None => {
-                // Ignore irrelevant tracing events.
-                return;
-            }
+        } else { 
+            // All other events.
+            self.record_io_event(event, ctx);
         }
     }
 
@@ -122,13 +95,54 @@ impl<S: Subscriber + for<'span> LookupSpan<'span>> Layer<S> for IoTraceLayer {
             }
         }
     }
-
-    fn on_close(&self, _id: span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {}
 }
 
 impl IoTraceLayer {
     pub fn new(file: Mutex<File>) -> Self {
         Self { file }
+    }
+
+    /// Print or buffer formatted tracing events that look like an IO event.
+    /// 
+    /// IO events are:
+    ///   - DB operations, emitted in core/store/src/lib.rs
+    ///   - Storage operations, emitted in runtime/near-vm-logic/src/logic.rs
+    fn record_io_event<S:Subscriber + for<'span> LookupSpan<'span>>(&self, event: &tracing::Event, ctx: tracing_subscriber::layer::Context<S>) {
+        let mut visitor = IoEventVisitor::default();
+        event.record(&mut visitor);
+        match visitor.t {
+                Some(IoEventType::DbOp(db_op)) => {
+                    let col = visitor.col.as_deref().unwrap_or("?");
+                    let key = visitor.key.as_deref().unwrap_or("?");
+                    let size = visitor.size.map(|num| num.to_string());
+                    let formatted_size = size.as_deref().unwrap_or("-");let output_line =
+                    format!("{db_op} {col} {key:?} size={formatted_size}");
+                    if let Some(span) = ctx.event_span(event) {
+                        span.extensions_mut().get_mut::<OutputBuffer>().unwrap().0.push(BufferedLine { indent: 2, output_line });
+                    
+                    } else {
+                        // Print top level unbuffered.
+                        writeln!(self.file.lock().unwrap(), "{output_line}").unwrap();
+                    }
+        
+                },
+                Some(IoEventType::StorageOp(storage_op)) => {
+                    let key = visitor.key.as_deref().unwrap_or("?");
+                    let size = visitor.size.map(|num| num.to_string());
+                    let formatted_size = size.as_deref().unwrap_or("-");
+                    let tn_db_reads = visitor.tn_db_reads.unwrap();
+                    let tn_mem_reads = visitor.tn_mem_reads.unwrap();
+        
+                    let span_info = 
+                    format!("{storage_op} key={key} size={formatted_size} tn_db_reads={tn_db_reads} tn_mem_reads={tn_mem_reads}");
+                
+                    let span = ctx.event_span(event).expect("storage operations must happen inside span");
+                        span.extensions_mut().get_mut::<SpanInfo>().unwrap().0.push(span_info);
+                }
+                None => {
+                    // Ignore irrelevant tracing events.
+                }
+            }
     }
 }
 
@@ -171,7 +185,7 @@ impl tracing::field::Visit for IoEventVisitor {
                 };
                 self.t = Some(IoEventType::StorageOp(op));
             }
-            // GET operation has uses a `Debug` printed `Option<usize>` for size.
+            // GET operation has a `Debug` printed `Option<usize>` for size.
             "size" => self.size = value.parse().ok(),
             "db_op" => {
                 let op = match value {
@@ -190,5 +204,12 @@ impl tracing::field::Visit for IoEventVisitor {
     }
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         self.record_str(field, &format!("{value:?}"))
+    }
+}
+
+impl tracing::field::Visit for SpanInfo {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let name = field.name();
+        self.0.push(format!("{name}={value:?}"));
     }
 }
