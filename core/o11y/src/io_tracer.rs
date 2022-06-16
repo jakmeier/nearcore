@@ -114,9 +114,12 @@ impl IoTraceLayer {
                 Some(IoEventType::DbOp(db_op)) => {
                     let col = visitor.col.as_deref().unwrap_or("?");
                     let key = visitor.key.as_deref().unwrap_or("?");
-                    let size = visitor.size.map(|num| num.to_string());
-                    let formatted_size = size.as_deref().unwrap_or("-");let output_line =
-                    format!("{db_op} {col} {key:?} size={formatted_size}");
+                    let formatted_size = if let Some(size) = visitor.size {
+                        format!(" size={size}")
+                    } else {
+                        String::new()
+                    };
+                    let output_line = format!("{db_op} {col} {key:?}{formatted_size}");
                     if let Some(span) = ctx.event_span(event) {
                         span.extensions_mut().get_mut::<OutputBuffer>().unwrap().0.push(BufferedLine { indent: 2, output_line });
                     
@@ -128,13 +131,16 @@ impl IoTraceLayer {
                 },
                 Some(IoEventType::StorageOp(storage_op)) => {
                     let key = visitor.key.as_deref().unwrap_or("?");
-                    let size = visitor.size.map(|num| num.to_string());
-                    let formatted_size = size.as_deref().unwrap_or("-");
+                    let formatted_size = if let Some(size) = visitor.size {
+                        format!(" size={size}")
+                    } else {
+                        String::new()
+                    };
                     let tn_db_reads = visitor.tn_db_reads.unwrap();
                     let tn_mem_reads = visitor.tn_mem_reads.unwrap();
         
                     let span_info = 
-                    format!("{storage_op} key={key} size={formatted_size} tn_db_reads={tn_db_reads} tn_mem_reads={tn_mem_reads}");
+                    format!("{storage_op} key={key}{formatted_size} tn_db_reads={tn_db_reads} tn_mem_reads={tn_mem_reads}");
                 
                     let span = ctx.event_span(event).expect("storage operations must happen inside span");
                         span.extensions_mut().get_mut::<SpanInfo>().unwrap().0.push(span_info);
@@ -186,7 +192,16 @@ impl tracing::field::Visit for IoEventVisitor {
                 self.t = Some(IoEventType::StorageOp(op));
             }
             // GET operation has a `Debug` printed `Option<usize>` for size.
-            "size" => self.size = value.parse().ok(),
+            "size" => {
+                if value == "None" {
+                    self.size = None;
+                } else {
+                    debug_assert!(value.starts_with("Some("));
+                    let start = 5;
+                    let end = value.len() - 1;
+                    self.size = value[start..end].parse().ok();
+                }
+            },
             "db_op" => {
                 let op = match value {
                     "get" => DbOp::Get,
