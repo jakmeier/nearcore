@@ -2350,8 +2350,8 @@ impl<'a> VMLogic<'a> {
             target: "vm_logic",
             storage_op = "write",
             key =  %near_primitives::serialize::to_base(key.clone()),
-            size=value_len,
-            evicted_len=evicted.as_ref().map(Vec::len),
+            size = value_len,
+            evicted_len = evicted.as_ref().map(Vec::len),
             tn_mem_reads = nodes_delta.mem_reads,
             tn_db_reads = nodes_delta.db_reads,
         );
@@ -2444,7 +2444,7 @@ impl<'a> VMLogic<'a> {
             target: "vm_logic",
             storage_op = "read",
             key =  %near_primitives::serialize::to_base(key.clone()),
-            size=read.as_ref().map(Vec::len),
+            size = read.as_ref().map(Vec::len),
             tn_db_reads,
             tn_mem_reads,
         );
