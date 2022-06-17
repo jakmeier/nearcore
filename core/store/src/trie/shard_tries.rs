@@ -52,17 +52,17 @@ impl TrieCacheFactory {
     }
 }
 
-struct ShardTriesInner {
+pub struct ShardTriesInner {
     store: Store,
     trie_cache_factory: TrieCacheFactory,
     /// Cache reserved for client actor to use
-    caches: RwLock<HashMap<ShardUId, TrieCache>>,
+    pub caches: RwLock<HashMap<ShardUId, TrieCache>>,
     /// Cache for readers.
     view_caches: RwLock<HashMap<ShardUId, TrieCache>>,
 }
 
 #[derive(Clone)]
-pub struct ShardTries(Arc<ShardTriesInner>);
+pub struct ShardTries(pub Arc<ShardTriesInner>);
 
 impl ShardTries {
     pub fn new(store: Store, trie_cache_factory: TrieCacheFactory) -> Self {
@@ -294,7 +294,7 @@ impl ShardTries {
 pub struct WrappedTrieChanges {
     tries: ShardTries,
     shard_uid: ShardUId,
-    trie_changes: TrieChanges,
+    pub trie_changes: TrieChanges,
     state_changes: Vec<RawStateChangesWithTrieKey>,
     block_hash: CryptoHash,
 }

@@ -17,6 +17,7 @@ use strum::IntoEnumIterator;
 use tracing::{error, info, warn};
 
 pub mod refcount;
+pub use refcount::add_positive_refcount;
 
 pub const VERSION_KEY: &[u8; 7] = b"VERSION";
 

@@ -51,7 +51,7 @@ pub fn decode_value_with_rc(bytes: &[u8]) -> (Option<&[u8]>, i64) {
 }
 
 /// Encode a positive reference count into the value.
-pub(crate) fn add_positive_refcount(data: &[u8], rc: std::num::NonZeroU32) -> Vec<u8> {
+pub fn add_positive_refcount(data: &[u8], rc: std::num::NonZeroU32) -> Vec<u8> {
     [data, &i64::from(rc.get()).to_le_bytes()].concat()
 }
 

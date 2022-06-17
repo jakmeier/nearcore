@@ -415,13 +415,13 @@ pub struct Trie {
 pub struct TrieRefcountChange {
     /// Hash of trie_node_or_value and part of the DB key.
     /// Used for uniting with shard id to get actual DB key.
-    trie_node_or_value_hash: CryptoHash,
+    pub trie_node_or_value_hash: CryptoHash,
     /// DB value. Can be either serialized RawTrieNodeWithSize or value corresponding to
     /// some TrieKey.
-    trie_node_or_value: Vec<u8>,
+    pub trie_node_or_value: Vec<u8>,
     /// Reference count difference which will be added to the total refcount if it corresponds to
     /// insertion and subtracted from it in the case of deletion.
-    rc: u32,
+    pub rc: u32,
 }
 
 ///
@@ -451,7 +451,7 @@ pub struct TrieRefcountChange {
 pub struct TrieChanges {
     pub old_root: StateRoot,
     pub new_root: StateRoot,
-    insertions: Vec<TrieRefcountChange>,
+    pub insertions: Vec<TrieRefcountChange>,
     deletions: Vec<TrieRefcountChange>,
 }
 
