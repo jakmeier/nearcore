@@ -8,7 +8,6 @@ use near_primitives::version::PROTOCOL_VERSION;
 use near_vm_runner::internal::VMKind;
 use replay::ReplayCmd;
 use runtime_params_estimator::config::{Config, GasMetric};
-use runtime_params_estimator::utils::read_resource;
 use runtime_params_estimator::{
     costs_to_runtime_config, CostTable, QemuCommandBuilder, RocksDBTestConfig,
 };
@@ -111,25 +110,6 @@ fn main() -> anyhow::Result<()> {
         };
     }
 
-    // TODO: consider implementing the same in Rust to reduce complexity.
-    // Good example: runtime/near-test-contracts/build.rs
-    if !cli_args.skip_build_test_contract {
-        let build_test_contract = "./build.sh";
-        let project_root = project_root();
-        let estimator_dir = project_root.join("runtime/runtime-params-estimator/test-contract");
-        let result = std::process::Command::new(build_test_contract)
-            .current_dir(estimator_dir)
-            .output()
-            .context("could not build test contract")?;
-        if !result.status.success() {
-            anyhow::bail!(
-                "Failed to build test contract, {}, stderr: {}",
-                result.status,
-                String::from_utf8_lossy(&result.stderr)
-            );
-        }
-    }
-
     let temp_dir;
     let state_dump_path = match cli_args.home {
         Some(it) => it,
@@ -148,11 +128,7 @@ fn main() -> anyhow::Result<()> {
         // example.) But this is generally a sign of a badly designed
         // estimation, therefore we make no effort to guarantee a fixed size.
         // Also, continuous estimation should be able to pick up such changes.
-        let contract_code = read_resource(if cfg!(feature = "nightly") {
-            "test-contract/res/nightly_contract.wasm"
-        } else {
-            "test-contract/res/stable_contract.wasm"
-        });
+        let contract_code = near_test_contracts::estimator_contract();
 
         nearcore::init_configs(
             &state_dump_path,
@@ -176,7 +152,7 @@ fn main() -> anyhow::Result<()> {
         let store = near_store::Store::opener(&state_dump_path, &near_config.config.store).open();
         GenesisBuilder::from_config_and_store(&state_dump_path, near_config, store)
             .add_additional_accounts(cli_args.additional_accounts_num)
-            .add_additional_accounts_contract(contract_code)
+            .add_additional_accounts_contract(contract_code.to_vec())
             .print_progress()
             .build()
             .unwrap()
@@ -222,6 +198,9 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    #[cfg(feature = "io_trace")]
+    let mut _maybe_writer_guard = None;
+
     if cli_args.tracing_span_tree {
         tracing_span_tree::span_tree().enable();
     } else {
@@ -233,7 +212,9 @@ fn main() -> anyhow::Result<()> {
         let subscriber = subscriber.with(cli_args.record_io_trace.map(|path| {
             let log_file =
                 fs::File::create(path).expect("unable to create or truncate IO trace output file");
-            near_o11y::make_io_tracing_layer(log_file)
+            let (subscriber, guard) = near_o11y::make_io_tracing_layer(log_file);
+            _maybe_writer_guard = Some(guard);
+            subscriber
         }));
 
         #[cfg(not(feature = "io_trace"))]
@@ -243,7 +224,7 @@ fn main() -> anyhow::Result<()> {
 
         tracing::subscriber::set_global_default(subscriber)
             .expect("setting default subscriber failed");
-    }
+    };
 
     let warmup_iters_per_block = cli_args.warmup_iters;
     let mut rocksdb_test_config = cli_args.db_test_config;
