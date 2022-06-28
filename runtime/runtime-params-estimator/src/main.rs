@@ -6,6 +6,7 @@ use genesis_populate::GenesisBuilder;
 use near_chain_configs::GenesisValidationMode;
 use near_primitives::version::PROTOCOL_VERSION;
 use near_vm_runner::internal::VMKind;
+use replay::ReplayCmd;
 use runtime_params_estimator::config::{Config, GasMetric};
 use runtime_params_estimator::utils::read_resource;
 use runtime_params_estimator::{
@@ -19,6 +20,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time;
 use tracing_subscriber::Layer;
+
+mod replay;
 
 #[derive(Parser)]
 struct CliArgs {
@@ -86,12 +89,27 @@ struct CliArgs {
     /// Extra configuration parameters for RocksDB specific estimations
     #[clap(flatten)]
     db_test_config: RocksDBTestConfig,
+    ///
+    #[clap(subcommand)]
+    sub_cmd: Option<CliSubCmd>,
+}
+
+#[derive(clap::Subcommand)]
+enum CliSubCmd {
+    Replay(ReplayCmd)
 }
 
 fn main() -> anyhow::Result<()> {
     let start = time::Instant::now();
 
     let cli_args = CliArgs::parse();
+
+    if let Some(cmd) = cli_args.sub_cmd {
+        return
+        match cmd {
+            CliSubCmd::Replay(inner) => inner.run(),
+        };
+    }
 
     // TODO: consider implementing the same in Rust to reduce complexity.
     // Good example: runtime/near-test-contracts/build.rs

@@ -212,6 +212,8 @@ pub fn run(config: Config) -> CostTable {
     let mut ctx = EstimatorContext::new(&config);
     let mut res = CostTable::default();
 
+    // let _span = tracing::debug_span!(target: "estimator", "run_all");
+
     for (cost, f) in ALL_COSTS.iter().copied() {
         let skip = match &ctx.config.costs_to_measure {
             None => false,
@@ -220,6 +222,9 @@ pub fn run(config: Config) -> CostTable {
         if skip {
             continue;
         }
+
+        let _span = tracing::debug_span!(target: "estimator", "estimation", cost = ?cost).entered();
+         tracing::trace!(target: "io_tracer", cost = ?cost);
 
         let start = Instant::now();
         let measurement = f(&mut ctx);

@@ -42,6 +42,7 @@ pub(crate) struct GasCost {
 pub(crate) struct GasClock {
     start: Instant,
     metric: GasMetric,
+    _span: tracing::span::EnteredSpan,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -63,11 +64,12 @@ impl GasCost {
     }
 
     pub(crate) fn measure(metric: GasMetric) -> GasClock {
+        let _span = tracing::debug_span!(target: "estimator", "measurement").entered();
         let start = Instant::now();
         if let GasMetric::ICount = metric {
             QemuMeasurement::start_count_instructions();
         };
-        GasClock { start, metric }
+        GasClock { start, metric, _span }
     }
 
     /// Creates `GasCost` out of raw numeric value of gas. This is required mostly for

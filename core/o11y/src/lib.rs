@@ -228,7 +228,7 @@ where
     S: tracing::Subscriber + for<'span> LookupSpan<'span>,
 {
     io_tracer::IoTraceLayer::new(file).with_filter(tracing_subscriber::filter::EnvFilter::new(
-        "store=trace,vm_logic=trace,host-function=trace,runtime=debug,io_tracer=trace,io_tracer.count=trace",
+        "store=trace,vm_logic=trace,host-function=trace,runtime=debug,io_tracer=trace,io_tracer.count=trace,estimator=trace",
     ))
 }
 
