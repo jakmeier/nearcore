@@ -8,6 +8,19 @@ use std::str::SplitWhitespace;
 #[derive(clap::Parser)]
 pub(crate) struct ReplayCmd {
     trace: PathBuf,
+    #[clap(
+        arg_enum,
+        long = "mode",
+        value_name = "REPLAY_MODE",
+        default_value_t = ReplayMode::Receipts
+    )]
+    mode: ReplayMode,
+}
+
+#[derive(Clone, clap::ArgEnum)]
+pub(crate) enum ReplayMode {
+    Receipts,
+    Estimator,
 }
 
 impl ReplayCmd {
@@ -40,8 +53,12 @@ impl ReplayCmd {
         //     accumulator: 0,
         // };
 
-        vec![Box::new(FoldDbOps::estimator_trace())]
-        // vec![Box::new(FoldDbOps::blocks_and_receipts())]
+        let visitor = match self.mode {
+            ReplayMode::Receipts => FoldDbOps::blocks_and_receipts(),
+            ReplayMode::Estimator => FoldDbOps::estimator_trace(),
+        };
+
+        vec![Box::new(visitor)]
     }
 }
 
