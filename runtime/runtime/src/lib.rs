@@ -1282,88 +1282,12 @@ impl Runtime {
         let storage = trie.storage.as_caching_storage().unwrap();
 
         for receipt in local_receipts.iter() {
-            if let ReceiptEnum::Action(action_receipt) = &receipt.receipt {
-                for action in &action_receipt.actions {
-                    match action {
-                        Action::FunctionCall(fn_action) => {
-                            // Hack to test Sweatcoin performance
-                            if fn_action.method_name == "record_batch" {
-                                if let Ok(json) =
-                                    serde_json::de::from_slice::<serde_json::Value>(&fn_action.args)
-                                {
-                                    println!("Decoded JSON");
-                                    if json.is_object() {
-                                        if let Some(list) = json.get("steps_batch") {
-                                            if let Some(list) = list.as_array() {
-                                                for tuple in list.iter() {
-                                                    if let Some(tuple) = tuple.as_array() {
-                                                        if let Some(account) = tuple.first() {
-                                                            println!(
-                                                                "prefetch for account {}",
-                                                                account
-                                                            );
-                                                            let (
-                                                                p_store,
-                                                                p_shard_cache,
-                                                                p_shard_uid,
-                                                            ) = storage.prefetcher_clone();
-                                                            let p_root = trie.get_root().clone();
-
-                                                            let sweatcoin_prefix =
-                                                                [0x74, 0x40, 0x00, 0x00, 0x00];
-                                                            let mut key = sweatcoin_prefix.to_vec();
-                                                            key.extend_from_slice(
-                                                                account
-                                                                    .as_str()
-                                                                    .unwrap()
-                                                                    .as_bytes(),
-                                                            );
-                                                            let storage_key =
-                                                                TrieKey::ContractData {
-                                                                    account_id: receipt
-                                                                        .receiver_id
-                                                                        .clone(),
-                                                                    key: key.to_vec(),
-                                                                }
-                                                                .to_vec();
-                                                            let _thread_handle =
-                                                                std::thread::spawn(move || {
-                                                                    let prefetcher_trie = Trie::new(
-                                                                        Box::new(
-                                                                            TrieCachingStorage::new(
-                                                                                p_store,
-                                                                                p_shard_cache,
-                                                                                p_shard_uid,
-                                                                            ),
-                                                                        ),
-                                                                        p_root,
-                                                                        None,
-                                                                    );
-                                                                    if let Ok(Some(_value)) =
-                                                                        prefetcher_trie
-                                                                            .get(&storage_key)
-                                                                    {
-                                                                        println!(
-                                                                            "Prefetch success"
-                                                                        );
-                                                                    }
-                                                                });
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            // NOP for now, future possibility to prefetch account and access key
-                        }
-                    }
-                }
-            }
+            prefetch_receipt(receipt, storage, &trie);
         }
+        for receipt in incoming_receipts.iter() {
+            prefetch_receipt(receipt, storage, &trie);
+        }
+
         // We first process local receipts. They contain staking, local contract calls, etc.
         for receipt in local_receipts.iter() {
             if total_gas_burnt < gas_limit {
@@ -1536,6 +1460,90 @@ impl Runtime {
         shard_account_ids: HashSet<AccountId>,
     ) -> StateRoot {
         GenesisStateApplier::apply(tries, shard_id, validators, config, genesis, shard_account_ids)
+    }
+}
+
+fn prefetch_receipt(receipt: &Receipt, storage: &TrieCachingStorage, trie: &Rc<Trie>) {
+    if let ReceiptEnum::Action(action_receipt) = &receipt.receipt {
+        for action in &action_receipt.actions {
+            match action {
+                Action::FunctionCall(fn_action) => {
+                    // Hack to test Sweatcoin performance
+                    if fn_action.method_name == "record_batch" {
+                        if let Ok(json) =
+                            serde_json::de::from_slice::<serde_json::Value>(&fn_action.args)
+                        {
+                            println!("Decoded JSON");
+                            if json.is_object() {
+                                if let Some(list) = json.get("steps_batch") {
+                                    if let Some(list) = list.as_array() {
+                                        for tuple in list.iter() {
+                                            if let Some(tuple) = tuple.as_array() {
+                                                if let Some(account) = tuple.first() {
+                                                    println!(
+                                                        "prefetch for account {}",
+                                                        account
+                                                    );
+                                                    let (
+                                                        p_store,
+                                                        p_shard_cache,
+                                                        p_shard_uid,
+                                                    ) = storage.prefetcher_clone();
+                                                    let p_root = trie.get_root().clone();
+
+                                                    let sweatcoin_prefix =
+                                                        [0x74, 0x40, 0x00, 0x00, 0x00];
+                                                    let mut key = sweatcoin_prefix.to_vec();
+                                                    key.extend_from_slice(
+                                                        account
+                                                            .as_str()
+                                                            .unwrap()
+                                                            .as_bytes(),
+                                                    );
+                                                    let storage_key =
+                                                        TrieKey::ContractData {
+                                                            account_id: receipt
+                                                                .receiver_id
+                                                                .clone(),
+                                                            key: key.to_vec(),
+                                                        }
+                                                        .to_vec();
+                                                    let _thread_handle =
+                                                        std::thread::spawn(move || {
+                                                            let prefetcher_trie = Trie::new(
+                                                                Box::new(
+                                                                    TrieCachingStorage::new(
+                                                                        p_store,
+                                                                        p_shard_cache,
+                                                                        p_shard_uid,
+                                                                    ),
+                                                                ),
+                                                                p_root,
+                                                                None,
+                                                            );
+                                                            if let Ok(Some(_value)) =
+                                                                prefetcher_trie
+                                                                    .get(&storage_key)
+                                                            {
+                                                                println!(
+                                                                    "Prefetch success"
+                                                                );
+                                                            }
+                                                        });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // NOP for now, future possibility to prefetch account and access key
+                }
+            }
+        }
     }
 }
 
