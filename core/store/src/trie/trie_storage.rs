@@ -227,6 +227,10 @@ impl TrieCachingStorage {
     pub fn set_mode(&self, state: TrieCacheMode) {
         self.cache_mode.set(state);
     }
+
+    pub fn prefetcher_clone(&self) -> (Store, TrieCache, ShardUId) {
+        (self.store.clone(), self.shard_cache.clone(), self.shard_uid.clone())
+    }
 }
 
 impl TrieStorage for TrieCachingStorage {
