@@ -1473,17 +1473,17 @@ fn prefetch_receipt(receipt: &Receipt, storage: &TrieCachingStorage, trie: &Rc<T
                         if let Ok(json) =
                             serde_json::de::from_slice::<serde_json::Value>(&fn_action.args)
                         {
-                            println!("Decoded JSON");
+                            // println!("Decoded JSON");
                             if json.is_object() {
                                 if let Some(list) = json.get("steps_batch") {
                                     if let Some(list) = list.as_array() {
                                         for tuple in list.iter() {
                                             if let Some(tuple) = tuple.as_array() {
                                                 if let Some(account) = tuple.first() {
-                                                    println!(
-                                                        "prefetch for account {}",
-                                                        account
-                                                    );
+                                                    // println!(
+                                                    //     "prefetch for account {}",
+                                                    //     account
+                                                    // );
                                                     let (
                                                         p_store,
                                                         p_shard_cache,
@@ -1525,9 +1525,9 @@ fn prefetch_receipt(receipt: &Receipt, storage: &TrieCachingStorage, trie: &Rc<T
                                                                 prefetcher_trie
                                                                     .get(&storage_key)
                                                             {
-                                                                println!(
-                                                                    "Prefetch success"
-                                                                );
+                                                                // println!(
+                                                                //     "Prefetch success"
+                                                                // );
                                                             }
                                                         });
                                                 }
