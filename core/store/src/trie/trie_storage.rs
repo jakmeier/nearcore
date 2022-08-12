@@ -251,6 +251,8 @@ impl TrieStorage for TrieCachingStorage {
             }
             None => {
                 near_o11y::io_trace!(count: "shard_cache_miss");
+                // TODO: Keep track of in-flight requests. Avoid multiple lookup.
+                std::mem::drop(guard);
                 // If value is not present in cache, get it from the storage.
                 let key = Self::get_key_from_shard_uid_and_hash(self.shard_uid, hash);
                 let val = self
@@ -267,6 +269,7 @@ impl TrieStorage for TrieCachingStorage {
                 // is always a value hash, so for each key there could be only one value, and it is impossible to have
                 // **different** values for the given key in shard and chunk caches.
                 if val.len() < TRIE_LIMIT_CACHED_VALUE_SIZE {
+                    let mut guard = self.shard_cache.0.lock().expect(POISONED_LOCK_ERR);
                     guard.put(*hash, val.clone());
                 } else {
                     near_o11y::io_trace!(count: "shard_cache_too_large");
