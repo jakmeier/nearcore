@@ -1,6 +1,7 @@
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 
 use near_primitives::sandbox::state_patch::SandboxStatePatch;
@@ -1279,13 +1280,23 @@ impl Runtime {
 
         let gas_limit = apply_state.gas_limit.unwrap_or(Gas::max_value());
 
-        let storage = trie.storage.as_caching_storage().unwrap();
+        let num_io_threads = 32;
+        let mut handles = vec![];
+        let mut txs = vec![];
+        for _ in 0..num_io_threads {
+            let (handle, tx) = start_io_thread(
+                trie.storage.as_caching_storage().unwrap(),
+                trie.get_root().clone(),
+            );
+            handles.push(handle);
+            txs.push(tx);
+        }
 
         for receipt in local_receipts.iter() {
-            prefetch_receipt(receipt, storage, &trie);
+            prefetch_receipt(receipt, txs.iter().cycle());
         }
         for receipt in incoming_receipts.iter() {
-            prefetch_receipt(receipt, storage, &trie);
+            prefetch_receipt(receipt, txs.iter().cycle());
         }
 
         // We first process local receipts. They contain staking, local contract calls, etc.
@@ -1372,6 +1383,14 @@ impl Runtime {
                 account_ids.insert(account_id.clone());
                 unique_proposals.push(proposal);
             }
+        }
+
+        // TODO: Threads are leaked if an error short-circuits before this line
+        for tx in txs {
+            tx.send(FireAndForgetIoRequest::StopSelf).unwrap();
+        }
+        for handle in handles {
+            handle.join().unwrap();
         }
 
         let state_root = trie_changes.new_root;
@@ -1463,7 +1482,41 @@ impl Runtime {
     }
 }
 
-fn prefetch_receipt(receipt: &Receipt, storage: &TrieCachingStorage, trie: &Rc<Trie>) {
+enum FireAndForgetIoRequest {
+    Prefetch(Vec<u8>),
+    StopSelf,
+}
+
+fn start_io_thread(
+    storage: &TrieCachingStorage,
+    p_root: StateRoot,
+) -> (std::thread::JoinHandle<()>, Sender<FireAndForgetIoRequest>) {
+    let (p_store, p_shard_cache, p_shard_uid) = storage.prefetcher_clone();
+    let (tx, rx) = channel::<FireAndForgetIoRequest>();
+    let thread_handle = std::thread::spawn(move || {
+        let prefetcher_trie = Trie::new(
+            Box::new(TrieCachingStorage::new(p_store, p_shard_cache, p_shard_uid)),
+            p_root,
+            None,
+        );
+        while let Ok(req) = rx.recv() {
+            match req {
+                FireAndForgetIoRequest::Prefetch(storage_key) => {
+                    if let Ok(Some(_value)) = prefetcher_trie.get(&storage_key) {
+                        near_o11y::io_trace!(count: "prefetch_success");
+                    }
+                }
+                FireAndForgetIoRequest::StopSelf => return,
+            }
+        }
+    });
+    (thread_handle, tx)
+}
+
+fn prefetch_receipt<'a>(
+    receipt: &Receipt,
+    mut tx_iter: impl Iterator<Item = &'a Sender<FireAndForgetIoRequest>>,
+) {
     if let ReceiptEnum::Action(action_receipt) = &receipt.receipt {
         for action in &action_receipt.actions {
             match action {
@@ -1480,56 +1533,23 @@ fn prefetch_receipt(receipt: &Receipt, storage: &TrieCachingStorage, trie: &Rc<T
                                         for tuple in list.iter() {
                                             if let Some(tuple) = tuple.as_array() {
                                                 if let Some(account) = tuple.first() {
-                                                    // println!(
-                                                    //     "prefetch for account {}",
-                                                    //     account
-                                                    // );
-                                                    let (
-                                                        p_store,
-                                                        p_shard_cache,
-                                                        p_shard_uid,
-                                                    ) = storage.prefetcher_clone();
-                                                    let p_root = trie.get_root().clone();
-
                                                     let sweatcoin_prefix =
                                                         [0x74, 0x40, 0x00, 0x00, 0x00];
                                                     let mut key = sweatcoin_prefix.to_vec();
                                                     key.extend_from_slice(
-                                                        account
-                                                            .as_str()
-                                                            .unwrap()
-                                                            .as_bytes(),
+                                                        account.as_str().unwrap().as_bytes(),
                                                     );
-                                                    let storage_key =
-                                                        TrieKey::ContractData {
-                                                            account_id: receipt
-                                                                .receiver_id
-                                                                .clone(),
-                                                            key: key.to_vec(),
-                                                        }
-                                                        .to_vec();
-                                                    let _thread_handle =
-                                                        std::thread::spawn(move || {
-                                                            let prefetcher_trie = Trie::new(
-                                                                Box::new(
-                                                                    TrieCachingStorage::new(
-                                                                        p_store,
-                                                                        p_shard_cache,
-                                                                        p_shard_uid,
-                                                                    ),
-                                                                ),
-                                                                p_root,
-                                                                None,
-                                                            );
-                                                            if let Ok(Some(_value)) =
-                                                                prefetcher_trie
-                                                                    .get(&storage_key)
-                                                            {
-                                                                // println!(
-                                                                //     "Prefetch success"
-                                                                // );
-                                                            }
-                                                        });
+                                                    let storage_key = TrieKey::ContractData {
+                                                        account_id: receipt.receiver_id.clone(),
+                                                        key: key.to_vec(),
+                                                    }
+                                                    .to_vec();
+                                                    near_o11y::io_trace!(count: "prefetch");
+                                                    let tx = tx_iter.next().unwrap();
+                                                    tx.send(FireAndForgetIoRequest::Prefetch(
+                                                        storage_key,
+                                                    ))
+                                                    .unwrap();
                                                 }
                                             }
                                         }
