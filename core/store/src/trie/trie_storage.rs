@@ -311,11 +311,14 @@ impl TrieStorage for TrieCachingStorage {
                     // If value is not present in cache, get it from the storage.
 
                     // Mark it for pre-fetchers that this is already being fetched.
-                    let _dropped = self
+                    let dropped = self
                         .prefetching
                         .lock()
                         .expect(POISONED_LOCK_ERR)
                         .insert(hash.clone(), PrefetchSlot::PendingFetch);
+
+                    // TODO: Remove / make it debug only
+                    assert!(dropped.is_none());
 
                     let key = Self::get_key_from_shard_uid_and_hash(self.shard_uid, hash);
                     let val = self
@@ -338,7 +341,12 @@ impl TrieStorage for TrieCachingStorage {
                 } else {
                     near_o11y::io_trace!(count: "shard_cache_too_large");
                 }
-                self.prefetching.lock().expect(POISONED_LOCK_ERR).remove(hash);
+                let dropped = self.prefetching.lock().expect(POISONED_LOCK_ERR).remove(hash);
+                let dropped = dropped.as_ref().unwrap();
+                assert!(
+                    prefetch_state_matches(PrefetchSlot::Done(Arc::new([])), dropped)
+                        || prefetch_state_matches(PrefetchSlot::PendingFetch, dropped),
+                );
 
                 val
             }
@@ -426,7 +434,11 @@ impl TrieStorage for TriePrefetchingStorage {
                             .clone()
                     })
                 } else {
-                    prefetch_guard.insert(hash.clone(), PrefetchSlot::PendingPrefetch);
+                    let dropped =
+                        prefetch_guard.insert(hash.clone(), PrefetchSlot::PendingPrefetch);
+                    // TODO: Remove / make it debug only
+                    assert!(dropped.is_none());
+
                     // It's important that the chunk_cache guard is held until
                     // after inserting `PrefetchSlot::Pending`, to avoid
                     // multiple I/O threads fetching the same data.
@@ -448,11 +460,10 @@ impl TrieStorage for TriePrefetchingStorage {
                         .lock()
                         .expect(POISONED_LOCK_ERR)
                         .insert(hash.clone(), PrefetchSlot::Done(val.clone()));
-                    // TODO: Remove panic / make it debug only
-                    match pending {
-                        Some(PrefetchSlot::PendingPrefetch) => { /* OK */ }
-                        _ => panic!("Slot should be PendingPrefetch"),
-                    }
+                    assert!(prefetch_state_matches(
+                        PrefetchSlot::PendingPrefetch,
+                        &pending.unwrap()
+                    ));
                     val
                 }
             }
@@ -483,5 +494,15 @@ fn wait_for_prefetched(
             }
             None => return None,
         }
+    }
+}
+
+fn prefetch_state_matches(expected: PrefetchSlot, actual: &PrefetchSlot) -> bool {
+    // TODO: Remove / make it debug only
+    match (expected, actual) {
+        (PrefetchSlot::PendingPrefetch, PrefetchSlot::PendingPrefetch)
+        | (PrefetchSlot::PendingFetch, PrefetchSlot::PendingFetch)
+        | (PrefetchSlot::Done(_), PrefetchSlot::Done(_)) => true,
+        _ => false,
     }
 }
