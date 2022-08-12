@@ -1281,22 +1281,24 @@ impl Runtime {
         let gas_limit = apply_state.gas_limit.unwrap_or(Gas::max_value());
 
         let num_io_threads = 32;
-        let mut handles = vec![];
-        let mut txs = vec![];
-        for _ in 0..num_io_threads {
-            let (handle, tx) = start_io_thread(
-                trie.storage.as_caching_storage().unwrap(),
-                trie.get_root().clone(),
-            );
-            handles.push(handle);
-            txs.push(tx);
-        }
+        let txs = (0..num_io_threads)
+            .map(|_| {
+                let (_handle, tx) = start_io_thread(
+                    trie.storage.as_caching_storage().unwrap(),
+                    trie.get_root().clone(),
+                );
+                tx
+            })
+            .collect::<Vec<_>>();
 
         for receipt in local_receipts.iter() {
             prefetch_receipt(receipt, txs.iter().cycle());
         }
         for receipt in incoming_receipts.iter() {
             prefetch_receipt(receipt, txs.iter().cycle());
+        }
+        for tx in txs {
+            tx.send(FireAndForgetIoRequest::StopSelf).unwrap();
         }
 
         // We first process local receipts. They contain staking, local contract calls, etc.
@@ -1383,14 +1385,6 @@ impl Runtime {
                 account_ids.insert(account_id.clone());
                 unique_proposals.push(proposal);
             }
-        }
-
-        // TODO: Threads are leaked if an error short-circuits before this line
-        for tx in txs {
-            tx.send(FireAndForgetIoRequest::StopSelf).unwrap();
-        }
-        for handle in handles {
-            handle.join().unwrap();
         }
 
         let state_root = trie_changes.new_root;
