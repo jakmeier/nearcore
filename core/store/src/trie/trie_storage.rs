@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -188,9 +187,10 @@ pub struct TrieCachingStorage {
     pub(crate) mem_read_nodes: Cell<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum PrefetchSlot {
-    Pending,
+    PendingPrefetch,
+    PendingFetch,
     Done(Arc<[u8]>),
 }
 
@@ -309,6 +309,14 @@ impl TrieStorage for TrieCachingStorage {
                     val
                 } else {
                     // If value is not present in cache, get it from the storage.
+
+                    // Mark it for pre-fetchers that this is already being fetched.
+                    let _dropped = self
+                        .prefetching
+                        .lock()
+                        .expect(POISONED_LOCK_ERR)
+                        .insert(hash.clone(), PrefetchSlot::PendingFetch);
+
                     let key = Self::get_key_from_shard_uid_and_hash(self.shard_uid, hash);
                     let val = self
                         .store
@@ -418,7 +426,7 @@ impl TrieStorage for TriePrefetchingStorage {
                             .clone()
                     })
                 } else {
-                    prefetch_guard.insert(hash.clone(), PrefetchSlot::Pending);
+                    prefetch_guard.insert(hash.clone(), PrefetchSlot::PendingPrefetch);
                     // It's important that the chunk_cache guard is held until
                     // after inserting `PrefetchSlot::Pending`, to avoid
                     // multiple I/O threads fetching the same data.
@@ -442,8 +450,8 @@ impl TrieStorage for TriePrefetchingStorage {
                         .insert(hash.clone(), PrefetchSlot::Done(val.clone()));
                     // TODO: Remove panic / make it debug only
                     match pending {
-                        Some(PrefetchSlot::Pending) => { /* OK */ }
-                        _ => panic!("Slot should be pending"),
+                        Some(PrefetchSlot::PendingPrefetch) => { /* OK */ }
+                        _ => panic!("Slot should be PendingPrefetch"),
                     }
                     val
                 }
@@ -463,12 +471,13 @@ fn wait_for_prefetched(
     key: CryptoHash,
 ) -> Option<Arc<[u8]>> {
     loop {
-        match prefetching.lock().expect(POISONED_LOCK_ERR).get(&key) {
+        let slot = prefetching.lock().expect(POISONED_LOCK_ERR).get(&key).cloned();
+        match slot {
             Some(PrefetchSlot::Done(value)) => {
                 near_o11y::io_trace!(count: "prefetch_hit");
                 return Some(value.clone());
             }
-            Some(PrefetchSlot::Pending) => {
+            Some(PrefetchSlot::PendingPrefetch) | Some(PrefetchSlot::PendingFetch) => {
                 near_o11y::io_trace!(count: "prefetch_pending");
                 std::thread::sleep(std::time::Duration::from_micros(100));
             }
