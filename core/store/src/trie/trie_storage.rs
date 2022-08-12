@@ -407,8 +407,15 @@ impl TrieStorage for TriePrefetchingStorage {
                 if prefetch_guard.contains_key(hash) {
                     std::mem::drop(guard);
                     std::mem::drop(prefetch_guard);
-                    wait_for_prefetched(&self.prefetching, hash.clone())
-                        .expect("must return a value")
+                    wait_for_prefetched(&self.prefetching, hash.clone()).unwrap_or_else(|| {
+                        self.shard_cache
+                            .0
+                            .lock()
+                            .expect(POISONED_LOCK_ERR)
+                            .get(hash)
+                            .expect("must be prefetched by now")
+                            .clone()
+                    })
                 } else {
                     prefetch_guard.insert(hash.clone(), PrefetchSlot::Pending);
                     // It's important that the chunk_cache guard is held until
