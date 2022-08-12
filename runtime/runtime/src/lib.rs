@@ -1359,6 +1359,11 @@ impl Runtime {
             }
         }
 
+        // If I/O threads are still doing something now, it will not longer be useful. Force stop.
+        if let Some(caching_storage) = trie.storage.as_caching_storage() {
+            caching_storage.stop_prefetcher();
+        }
+
         if delayed_receipts_indices != initial_delayed_receipt_indices {
             set(&mut state_update, TrieKey::DelayedReceiptIndices, &delayed_receipts_indices);
         }
