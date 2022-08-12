@@ -1,5 +1,7 @@
 use std::borrow::Borrow;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use near_primitives::hash::CryptoHash;
@@ -174,11 +176,27 @@ pub struct TrieCachingStorage {
     pub(crate) chunk_cache: RefCell<HashMap<CryptoHash, Arc<[u8]>>>,
     pub(crate) cache_mode: Cell<TrieCacheMode>,
 
+    /// Prefetching IO threads will insert fetched data here. This is also used
+    /// to mark what is already being fetched, to avoid fetching the same data
+    /// multiple times.
+    pub(crate) prefetching: Arc<Mutex<HashMap<CryptoHash, PrefetchSlot>>>,
+
     /// Counts potentially expensive trie node reads which are served from disk in the worst case. Here we count reads
     /// from DB or shard cache.
     pub(crate) db_read_nodes: Cell<u64>,
     /// Counts trie nodes retrieved from the chunk cache.
     pub(crate) mem_read_nodes: Cell<u64>,
+}
+
+#[derive(Debug)]
+pub(crate) enum PrefetchSlot {
+    Pending,
+    Done(Arc<[u8]>),
+}
+
+pub enum FireAndForgetIoRequest {
+    Prefetch(Vec<u8>),
+    StopSelf,
 }
 
 impl TrieCachingStorage {
@@ -188,6 +206,7 @@ impl TrieCachingStorage {
             shard_uid,
             shard_cache,
             cache_mode: Cell::new(TrieCacheMode::CachingShard),
+            prefetching: Default::default(),
             chunk_cache: RefCell::new(Default::default()),
             db_read_nodes: Cell::new(0),
             mem_read_nodes: Cell::new(0),
@@ -228,8 +247,39 @@ impl TrieCachingStorage {
         self.cache_mode.set(state);
     }
 
-    pub fn prefetcher_clone(&self) -> (Store, TrieCache, ShardUId) {
-        (self.store.clone(), self.shard_cache.clone(), self.shard_uid.clone())
+    pub fn start_io_thread(
+        &self,
+        root: CryptoHash,
+    ) -> (std::thread::JoinHandle<()>, Sender<FireAndForgetIoRequest>) {
+        // Spawn a new thread that has access to the same db connection and
+        // shard cache (for reading what is already cached). Also share the same
+        // prefetching space to coordinate in-flight requests.
+        // This thread receives requests over an MPSC channel.
+        let (tx, rx) = std::sync::mpsc::channel::<FireAndForgetIoRequest>();
+
+        // `Trie` cannot be sent across threads but `TriePrefetchingStorage` can.
+        //  Therefore, construct `Trie` in new thread.
+        let prefetcher_storage = TriePrefetchingStorage::new(
+            self.store.clone(),
+            self.shard_uid.clone(),
+            self.shard_cache.clone(),
+            self.prefetching.clone(),
+        );
+
+        let thread_handle = std::thread::spawn(move || {
+            let prefetcher_trie = crate::Trie::new(Box::new(prefetcher_storage), root, None);
+            while let Ok(req) = rx.recv() {
+                match req {
+                    FireAndForgetIoRequest::Prefetch(storage_key) => {
+                        if let Ok(Some(_value)) = prefetcher_trie.get(&storage_key) {
+                            near_o11y::io_trace!(count: "prefetch_success");
+                        }
+                    }
+                    FireAndForgetIoRequest::StopSelf => return,
+                }
+            }
+        });
+        (thread_handle, tx)
     }
 }
 
@@ -250,19 +300,25 @@ impl TrieStorage for TrieCachingStorage {
                 val.clone()
             }
             None => {
-                near_o11y::io_trace!(count: "shard_cache_miss");
-                // TODO: Keep track of in-flight requests. Avoid multiple lookup.
                 std::mem::drop(guard);
-                // If value is not present in cache, get it from the storage.
-                let key = Self::get_key_from_shard_uid_and_hash(self.shard_uid, hash);
-                let val = self
-                    .store
-                    .get(DBCol::State, key.as_ref())
-                    .map_err(|_| StorageError::StorageInternalError)?
-                    .ok_or_else(|| {
-                        StorageError::StorageInconsistentState("Trie node missing".to_string())
-                    })?;
-                let val: Arc<[u8]> = val.into();
+                near_o11y::io_trace!(count: "shard_cache_miss");
+                // If data is already being prefetched, wait for that instead of sending a new request.
+                let val: Arc<[u8]> = if let Some(val) =
+                    wait_for_prefetched(&self.prefetching, hash.clone())
+                {
+                    val
+                } else {
+                    // If value is not present in cache, get it from the storage.
+                    let key = Self::get_key_from_shard_uid_and_hash(self.shard_uid, hash);
+                    let val = self
+                        .store
+                        .get(DBCol::State, key.as_ref())
+                        .map_err(|_| StorageError::StorageInternalError)?
+                        .ok_or_else(|| {
+                            StorageError::StorageInconsistentState("Trie node missing".to_string())
+                        })?;
+                    val.into()
+                };
 
                 // Insert value to shard cache, if its size is small enough.
                 // It is fine to have a size limit for shard cache and **not** have a limit for chunk cache, because key
@@ -303,5 +359,129 @@ impl TrieStorage for TrieCachingStorage {
 
     fn get_trie_nodes_count(&self) -> TrieNodesCount {
         TrieNodesCount { db_reads: self.db_read_nodes.get(), mem_reads: self.mem_read_nodes.get() }
+    }
+}
+
+/// Storage used by I/O threads to prefetch data.
+///
+/// Is always linked to a parent `TrieCachingStorage`. One  caching storage can
+/// produce many I/O threads and each will have its own prefetching storage.
+/// However, the underlying shard cache and prefetching map is shared among all
+/// instances, including the parent.
+pub struct TriePrefetchingStorage {
+    /// Store is shared with parent `TrieCachingStorage`.
+    pub(crate) store: Store,
+    pub(crate) shard_uid: ShardUId,
+    /// Shard cache is shared with parent `TrieCachingStorage`. But the
+    /// pre-fetcher uses this in read-only mode to avoid premature evictions.
+    pub(crate) shard_cache: TrieCache,
+    /// Shared with parent `TrieCachingStorage`.
+    ///
+    /// Before starting a pre-fetch, a slot is reserved for it. Once the data is
+    /// here, it will be put in that slot. The parent `TrieCachingStorage` needs
+    /// to take it out and move it to the shard cache.
+    pub(crate) prefetching: Arc<Mutex<HashMap<CryptoHash, PrefetchSlot>>>,
+}
+
+impl TriePrefetchingStorage {
+    fn new(
+        store: Store,
+        shard_uid: ShardUId,
+        shard_cache: TrieCache,
+        prefetching: Arc<Mutex<HashMap<CryptoHash, PrefetchSlot>>>,
+    ) -> Self {
+        Self { store, shard_uid, shard_cache, prefetching }
+    }
+}
+
+impl TrieStorage for TriePrefetchingStorage {
+    fn retrieve_raw_bytes(&self, hash: &CryptoHash) -> Result<Arc<[u8]>, StorageError> {
+        // Try to get value from shard cache containing most recently touched nodes.
+        let mut guard = self.shard_cache.0.lock().expect(POISONED_LOCK_ERR);
+        let val = match guard.get(hash) {
+            Some(val) => val.clone(),
+            None => {
+                // If data is already being prefetched, wait for that instead of sending a new request.
+                let mut prefetch_guard = self.prefetching.lock().expect(POISONED_LOCK_ERR);
+
+                if prefetch_guard.contains_key(hash) {
+                    std::mem::drop(guard);
+                    std::mem::drop(prefetch_guard);
+                    wait_for_prefetched(&self.prefetching, hash.clone())
+                        .expect("must return a value")
+                } else {
+                    prefetch_guard.insert(hash.clone(), PrefetchSlot::Pending);
+                    // It's important that the chunk_cache guard is held until
+                    // after inserting `PrefetchSlot::Pending`, to avoid
+                    // multiple I/O threads fetching the same data.
+                    std::mem::drop(guard);
+                    std::mem::drop(prefetch_guard);
+                    let key =
+                        TrieCachingStorage::get_key_from_shard_uid_and_hash(self.shard_uid, hash);
+                    let val: Arc<[u8]> = self
+                        .store
+                        .get(DBCol::State, key.as_ref())
+                        .map_err(|_| StorageError::StorageInternalError)?
+                        .ok_or_else(|| {
+                            StorageError::StorageInconsistentState("Trie node missing".to_string())
+                        })?
+                        .into();
+
+                    let pending = self
+                        .prefetching
+                        .lock()
+                        .expect(POISONED_LOCK_ERR)
+                        .insert(hash.clone(), PrefetchSlot::Done(val.clone()));
+                    // TODO: Remove panic / make it debug only
+                    match pending {
+                        Some(PrefetchSlot::Pending) => { /* OK */ }
+                        _ => panic!("Slot should be pending"),
+                    }
+                    val
+                }
+            }
+        };
+
+        Ok(val)
+    }
+
+    fn get_trie_nodes_count(&self) -> TrieNodesCount {
+        unimplemented!()
+    }
+}
+
+fn check_prefetched(
+    prefetching: &Arc<Mutex<HashMap<CryptoHash, PrefetchSlot>>>,
+    key: CryptoHash,
+) -> Option<PrefetchSlot> {
+    match prefetching.lock().expect(POISONED_LOCK_ERR).entry(key) {
+        Entry::Occupied(entry) => match entry.get() {
+            PrefetchSlot::Pending => Some(PrefetchSlot::Pending),
+            PrefetchSlot::Done(_) => {
+                let prefetch_slot = entry.remove();
+                near_o11y::io_trace!(count: "prefetch_hit");
+                Some(prefetch_slot)
+            }
+        },
+        Entry::Vacant(_) => None,
+    }
+}
+
+fn wait_for_prefetched(
+    prefetching: &Arc<Mutex<HashMap<CryptoHash, PrefetchSlot>>>,
+    key: CryptoHash,
+) -> Option<Arc<[u8]>> {
+    loop {
+        match check_prefetched(prefetching, key) {
+            Some(PrefetchSlot::Done(value)) => {
+                near_o11y::io_trace!(count: "prefetch_hit");
+                return Some(value);
+            }
+            Some(PrefetchSlot::Pending) => {
+                near_o11y::io_trace!(count: "prefetch_pending");
+                std::thread::sleep(std::time::Duration::from_micros(100));
+            }
+            None => return None,
+        }
     }
 }

@@ -1,7 +1,7 @@
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use near_primitives::sandbox::state_patch::SandboxStatePatch;
@@ -45,8 +45,8 @@ use near_primitives::{
 };
 use near_store::{
     get, get_account, get_postponed_receipt, get_received_data, remove_postponed_receipt, set,
-    set_account, set_postponed_receipt, set_received_data, PartialStorage, ShardTries,
-    StorageError, Trie, TrieCachingStorage, TrieChanges, TrieUpdate,
+    set_account, set_postponed_receipt, set_received_data, FireAndForgetIoRequest, PartialStorage,
+    ShardTries, StorageError, Trie, TrieChanges, TrieUpdate,
 };
 use near_store::{set_access_key, set_code};
 use near_vm_logic::types::PromiseResult;
@@ -1280,25 +1280,29 @@ impl Runtime {
 
         let gas_limit = apply_state.gas_limit.unwrap_or(Gas::max_value());
 
-        let num_io_threads = 32;
-        let txs = (0..num_io_threads)
-            .map(|_| {
-                let (_handle, tx) = start_io_thread(
-                    trie.storage.as_caching_storage().unwrap(),
-                    trie.get_root().clone(),
-                );
-                tx
-            })
-            .collect::<Vec<_>>();
-
-        for receipt in local_receipts.iter() {
-            prefetch_receipt(receipt, txs.iter().cycle());
-        }
-        for receipt in incoming_receipts.iter() {
-            prefetch_receipt(receipt, txs.iter().cycle());
-        }
-        for tx in txs {
-            tx.send(FireAndForgetIoRequest::StopSelf).unwrap();
+        if let Some(caching_storage) = trie.storage.as_caching_storage() {
+            let num_io_threads = 32;
+            let txs = (0..num_io_threads)
+                .map(|_| {
+                    let (_handle, tx) = caching_storage.start_io_thread(trie.get_root().clone());
+                    tx
+                })
+                .collect::<Vec<_>>();
+            // Local receipts will be executed first, start by prefetching for those.
+            for receipt in local_receipts.iter() {
+                prefetch_receipt(receipt, txs.iter().cycle());
+            }
+            // Delayed receipts have already been prefetched, skip prefetching them.
+            // Prefetch all incoming receipts.
+            // TODO: Handle long queues of incoming receipts, to avoid prefetching too early.
+            for receipt in incoming_receipts.iter() {
+                prefetch_receipt(receipt, txs.iter().cycle());
+            }
+            // All prefetch requests have been queued. Add a command at the end
+            // of each queue to stop the thread.
+            for tx in txs {
+                tx.send(FireAndForgetIoRequest::StopSelf).unwrap();
+            }
         }
 
         // We first process local receipts. They contain staking, local contract calls, etc.
@@ -1476,37 +1480,6 @@ impl Runtime {
     }
 }
 
-enum FireAndForgetIoRequest {
-    Prefetch(Vec<u8>),
-    StopSelf,
-}
-
-fn start_io_thread(
-    storage: &TrieCachingStorage,
-    p_root: StateRoot,
-) -> (std::thread::JoinHandle<()>, Sender<FireAndForgetIoRequest>) {
-    let (p_store, p_shard_cache, p_shard_uid) = storage.prefetcher_clone();
-    let (tx, rx) = channel::<FireAndForgetIoRequest>();
-    let thread_handle = std::thread::spawn(move || {
-        let prefetcher_trie = Trie::new(
-            Box::new(TrieCachingStorage::new(p_store, p_shard_cache, p_shard_uid)),
-            p_root,
-            None,
-        );
-        while let Ok(req) = rx.recv() {
-            match req {
-                FireAndForgetIoRequest::Prefetch(storage_key) => {
-                    if let Ok(Some(_value)) = prefetcher_trie.get(&storage_key) {
-                        near_o11y::io_trace!(count: "prefetch_success");
-                    }
-                }
-                FireAndForgetIoRequest::StopSelf => return,
-            }
-        }
-    });
-    (thread_handle, tx)
-}
-
 fn prefetch_receipt<'a>(
     receipt: &Receipt,
     mut tx_iter: impl Iterator<Item = &'a Sender<FireAndForgetIoRequest>>,
@@ -1527,8 +1500,9 @@ fn prefetch_receipt<'a>(
                                         for tuple in list.iter() {
                                             if let Some(tuple) = tuple.as_array() {
                                                 if let Some(account) = tuple.first() {
+                                                    // TODO: Where does the "0x40, 0x00, 0x00, 0x00" come from?
                                                     let sweatcoin_prefix =
-                                                        [0x74, 0x40, 0x00, 0x00, 0x00];
+                                                        [b't', 0x40, 0x00, 0x00, 0x00];
                                                     let mut key = sweatcoin_prefix.to_vec();
                                                     key.extend_from_slice(
                                                         account.as_str().unwrap().as_bytes(),
