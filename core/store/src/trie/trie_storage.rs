@@ -330,6 +330,7 @@ impl TrieStorage for TrieCachingStorage {
                 } else {
                     near_o11y::io_trace!(count: "shard_cache_too_large");
                 }
+                self.prefetching.lock().expect(POISONED_LOCK_ERR).remove(hash);
 
                 val
             }
@@ -457,32 +458,15 @@ impl TrieStorage for TriePrefetchingStorage {
     }
 }
 
-fn check_prefetched(
-    prefetching: &Arc<Mutex<HashMap<CryptoHash, PrefetchSlot>>>,
-    key: CryptoHash,
-) -> Option<PrefetchSlot> {
-    match prefetching.lock().expect(POISONED_LOCK_ERR).entry(key) {
-        Entry::Occupied(entry) => match entry.get() {
-            PrefetchSlot::Pending => Some(PrefetchSlot::Pending),
-            PrefetchSlot::Done(_) => {
-                let prefetch_slot = entry.remove();
-                near_o11y::io_trace!(count: "prefetch_hit");
-                Some(prefetch_slot)
-            }
-        },
-        Entry::Vacant(_) => None,
-    }
-}
-
 fn wait_for_prefetched(
     prefetching: &Arc<Mutex<HashMap<CryptoHash, PrefetchSlot>>>,
     key: CryptoHash,
 ) -> Option<Arc<[u8]>> {
     loop {
-        match check_prefetched(prefetching, key) {
+        match prefetching.lock().expect(POISONED_LOCK_ERR).get(&key) {
             Some(PrefetchSlot::Done(value)) => {
                 near_o11y::io_trace!(count: "prefetch_hit");
-                return Some(value);
+                return Some(value.clone());
             }
             Some(PrefetchSlot::Pending) => {
                 near_o11y::io_trace!(count: "prefetch_pending");
