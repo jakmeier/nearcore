@@ -37,6 +37,8 @@ use near_store::TrieConfig;
 use near_store::{NodeStorage, Store};
 use nearcore::{NearConfig, NightshadeRuntime};
 use node_runtime::adapter::ViewRuntimeAdapter;
+use node_runtime::config::total_prepaid_exec_fees;
+use node_runtime::config::RuntimeConfig;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -874,6 +876,7 @@ pub(crate) fn new_gas_params(
         !near_config.client_config.archive,
     );
     let config_store = RuntimeConfigStore::new(None);
+    let new_config = RuntimeConfig::new(new_params_table)?;
 
     let mut num_no_profile = 0;
     let mut num_cheaper = 0;
@@ -897,8 +900,8 @@ pub(crate) fn new_gas_params(
         let block_hash = chain_store.get_block_hash_by_height(height)?;
 
         let block = chain_store.get_block(&block_hash)?;
-        let block_runtime_config =
-            config_store.get_config(block.header().latest_protocol_version());
+        let block_protocol_version = block.header().latest_protocol_version();
+        let block_runtime_config = config_store.get_config(block_protocol_version);
 
         for chunk_header in block.chunks().iter() {
             let chunk = chain_store.get_chunk(&chunk_header.chunk_hash())?;
@@ -913,7 +916,13 @@ pub(crate) fn new_gas_params(
                         block_runtime_config,
                     );
                     if let Some(gas_profile) = gas_profile {
-                        let new_gas = gas_profile.gas_required(&new_params_table);
+                        let new_gas = gas_profile.gas_required(&new_params_table)
+                            + total_prepaid_exec_fees(
+                                &new_config.transaction_costs,
+                                &as_action_receipt(receipt).unwrap().actions,
+                                &receipt.receiver_id,
+                                block_protocol_version,
+                            )?;
                         match new_gas.cmp(&gas_burnt) {
                             std::cmp::Ordering::Equal => num_equal += 1,
                             std::cmp::Ordering::Greater => {

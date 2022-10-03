@@ -27,7 +27,7 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    pub(crate) fn new(params: &ParameterTable) -> Result<Self, InvalidConfigError> {
+    pub fn new(params: &ParameterTable) -> Result<Self, InvalidConfigError> {
         serde_json::from_value(params.runtime_config_json())
             .map_err(InvalidConfigError::WrongStructure)
     }
