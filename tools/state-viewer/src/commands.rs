@@ -882,15 +882,17 @@ pub(crate) fn new_gas_params(
     let mut num_ok = 0;
     let mut num_avoidable_err = 0;
     let mut num_unavoidable_err = 0;
-    let mut out = std::io::stdout().lock();
+
+    let mut total_gas_cheaper = 0;
+    let mut total_gas_more_expensive = 0;
 
     let mut affected_accounts: BTreeMap<AccountId, (u32, u32)> = BTreeMap::new();
+    const MAX_RECEIPTS_PRINTED: usize = 10;
     let mut cheaper_receipts = vec![];
     let mut avoidable_err_receipts = vec![];
     let mut unavoidable_err_receipts = vec![];
 
-    const MAX_RECEIPTS_PRINTED: usize = 10;
-
+    let mut out = std::io::stdout().lock();
     for height in start_height..=end_height {
         let block_hash = chain_store.get_block_hash_by_height(height)?;
 
@@ -940,11 +942,15 @@ pub(crate) fn new_gas_params(
                         let new_gas = gas_profile.gas_required(&new_params_table);
                         match new_gas.cmp(&gas_burnt) {
                             std::cmp::Ordering::Equal => num_equal += 1,
-                            std::cmp::Ordering::Greater => num_more_expensive += 1,
+                            std::cmp::Ordering::Greater => {
+                                num_more_expensive += 1;
+                                total_gas_more_expensive += new_gas - gas_burnt;
+                            }
                             std::cmp::Ordering::Less => {
-                                if cheaper_receipts.len() > MAX_RECEIPTS_PRINTED {
+                                if cheaper_receipts.len() < MAX_RECEIPTS_PRINTED {
                                     cheaper_receipts.push(receipt.receipt_id);
                                 }
+                                total_gas_cheaper += gas_burnt - new_gas;
                                 num_cheaper += 1;
                             }
                         }
@@ -954,45 +960,31 @@ pub(crate) fn new_gas_params(
                             num_avoidable_err += 1;
                             affected_accounts.entry(receipt.receiver_id.clone()).or_default().0 +=
                                 1;
-                            if avoidable_err_receipts.len() > MAX_RECEIPTS_PRINTED {
+                            if avoidable_err_receipts.len() < MAX_RECEIPTS_PRINTED {
                                 avoidable_err_receipts.push(receipt.receipt_id);
                             }
                             let percent = ((new_gas as f64 / gas_burnt as f64) - 1.0) * 100.0;
                             writeln!(
                                 out,
-                                "{receipt_id:?} OK but exceeds old gas burnt by {percent:.3}% ({gas_limit} > {new_gas} > {gas_available})"
+                                "{receipt_id:?} OK but exceeds old gas burnt by {percent:.2}% ({gas_limit} > {new_gas} > {gas_available})"
                             )?;
                         } else {
                             num_unavoidable_err += 1;
                             affected_accounts.entry(receipt.receiver_id.clone()).or_default().1 +=
                                 1;
-                            if unavoidable_err_receipts.len() > MAX_RECEIPTS_PRINTED {
+                            if unavoidable_err_receipts.len() < MAX_RECEIPTS_PRINTED {
                                 unavoidable_err_receipts.push(receipt.receipt_id);
                             }
                             let percent = ((new_gas as f64 / gas_limit as f64) - 1.0) * 100.0;
                             writeln!(
                                 out,
-                                "{receipt_id:?} exceeds gas limit by {percent:.3}% ({new_gas} > {gas_limit} > {gas_available})"
+                                "{receipt_id:?} exceeds gas limit by {percent:.2}% ({new_gas} > {gas_limit} > {gas_available})"
                             )?;
                         }
                     } else if gas_available > 0 {
                         num_no_profile += 1;
                         writeln!(out, "missing gas profile {receipt_id:?}")?;
                     }
-
-                    // if let Some(fns) = fn_calls(receipt) {}
-                    // for fn_call_action in .iter().flatten() {
-                    //     gas_available += fn_call_action.gas;
-
-                    //     // match gas_profile {
-                    //     //     Some(profile) => {
-                    //     //         writeln!(out, "{profile}")?;
-                    //     //     }
-                    //     //     None => {
-                    //     //         writeln!(out, "No gas profile found")?;
-                    //     //     }
-                    //     // }
-                    // }
                 }
             }
         }
@@ -1022,16 +1014,19 @@ pub(crate) fn new_gas_params(
         }))
     }
 
+    let avg_cheaper = total_gas_cheaper as f64 / num_cheaper as f64;
+    let avg_expensive = total_gas_more_expensive as f64 / num_more_expensive as f64;
+
     writeln!(out)?;
     writeln!(out, "Summary for checked range {start_height} - {end_height}")?;
     writeln!(out)?;
-    writeln!(out, "{num_cheaper:<12} became cheaper")?;
+    writeln!(out, "{num_cheaper:<12} became cheaper, {avg_cheaper:.1} gas on average")?;
     writeln!(out, "{num_equal:<12} same amount of gas")?;
-    writeln!(out, "{num_more_expensive:<12} more expensive")?;
+    writeln!(out, "{num_more_expensive:<12} more expensive, {avg_expensive:.1} gas on average")?;
     writeln!(out)?;
     writeln!(out, "{num_unavoidable_err:<12} exceeding gas limit of {gas_limit}")?;
     writeln!(out, "{num_avoidable_err:<12} need more gas attached")?;
-    writeln!(out, "{num_ok:<12} ok without user-side change")?;
+    writeln!(out, "{num_ok:<12} ok")?;
     writeln!(out)?;
     writeln!(out, "{num_no_profile:<12} without profile")?;
     writeln!(out)?;
