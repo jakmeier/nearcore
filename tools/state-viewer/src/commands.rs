@@ -909,9 +909,9 @@ pub(crate) fn new_gas_params(
                 let receipt_id = receipt.receipt_id;
                 for outcome in chain_store.get_outcomes_by_id(&receipt_id)? {
                     let gas_burnt = outcome.outcome_with_id.outcome.gas_burnt;
-                    let gas_available: u64 =
+                    let gas_attached: u64 =
                         fn_calls(receipt).into_iter().flatten().map(|func| func.gas).sum();
-                    if gas_available == 0 {
+                    if gas_attached == 0 {
                         // Not a fn call, skip.
                         continue;
                     }
@@ -920,13 +920,14 @@ pub(crate) fn new_gas_params(
                         block_runtime_config,
                     );
                     if let Some(gas_profile) = gas_profile {
-                        let new_gas = gas_profile.gas_required(&new_params_table)
-                            + total_prepaid_exec_fees(
-                                &new_config.transaction_costs,
-                                &as_action_receipt(receipt).unwrap().actions,
-                                &receipt.receiver_id,
-                                block_protocol_version,
-                            )?;
+                        let gas_pre_burned = total_prepaid_exec_fees(
+                            &new_config.transaction_costs,
+                            &as_action_receipt(receipt).unwrap().actions,
+                            &receipt.receiver_id,
+                            block_protocol_version,
+                        )?;
+                        let gas_available = gas_attached + gas_pre_burned;
+                        let new_gas = gas_profile.gas_required(&new_params_table) + gas_pre_burned;
                         match new_gas.cmp(&gas_burnt) {
                             std::cmp::Ordering::Equal => num_equal += 1,
                             std::cmp::Ordering::Greater => {
@@ -973,7 +974,7 @@ pub(crate) fn new_gas_params(
                                 "{receipt_id:?} exceeds gas limit by {percent:.2}% ({new_gas} > {gas_limit} > {gas_available})"
                             )?;
                         }
-                    } else if gas_available > 0 {
+                    } else {
                         num_no_profile += 1;
                         writeln!(out, "missing gas profile {receipt_id:?}")?;
                     }
