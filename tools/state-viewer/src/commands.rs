@@ -922,12 +922,14 @@ pub(crate) fn new_gas_params(
                         block_runtime_config,
                     );
                     if let Some(gas_profile) = gas_profile {
-                        let gas_pre_burned = total_prepaid_exec_fees(
-                            &new_config.transaction_costs,
-                            &as_action_receipt(receipt).unwrap().actions,
-                            &receipt.receiver_id,
-                            block_protocol_version,
-                        )?;
+                        let gas_pre_burned =
+                            new_config.transaction_costs.action_receipt_creation_config.exec_fee()
+                                + total_prepaid_exec_fees(
+                                    &new_config.transaction_costs,
+                                    &as_action_receipt(receipt).unwrap().actions,
+                                    &receipt.receiver_id,
+                                    block_protocol_version,
+                                )?;
                         let gas_available = gas_attached + gas_pre_burned;
 
                         let outoing_send_gas: Gas = outcome
@@ -1002,7 +1004,7 @@ pub(crate) fn new_gas_params(
                                 num_cheaper += 1;
                             }
                         }
-                        debug!(target: "state-viewer", "{receipt_id} new_gas={new_gas}, gas_available={gas_available}, gas_attached={gas_attached}, gas_pre_burned={gas_pre_burned}, gas_burnt={gas_burnt}");
+                        println!(target: "state-viewer", "{receipt_id} new_gas={new_gas}, gas_available={gas_available}, gas_attached={gas_attached}, gas_pre_burned={gas_pre_burned}, gas_burnt={gas_burnt}");
                         if new_gas <= gas_available {
                             num_ok += 1;
                         } else if new_gas <= gas_limit {
