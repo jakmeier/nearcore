@@ -47,7 +47,6 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::log::debug;
 
 pub(crate) fn peers(store: NodeStorage) {
     iter_peers_from_store(store, |(peer_id, peer_info)| {
@@ -949,7 +948,7 @@ pub(crate) fn new_gas_params(
                                     outgoing_receipt.predecessor_id == outgoing_receipt.receiver_id;
                                 match &outgoing_receipt.receipt {
                                     ReceiptEnum::Action(action_receipt) => {
-                                        new_config
+                                        let action_cost = new_config
                                             .transaction_costs
                                             .action_receipt_creation_config
                                             .send_fee(sender_is_receiver)
@@ -960,24 +959,43 @@ pub(crate) fn new_gas_params(
                                                 &outgoing_receipt.receiver_id,
                                                 block_protocol_version,
                                             )
-                                            .expect("fee calculation must not fail")
-                                    }
-                                    ReceiptEnum::Data(data_receipt) => {
-                                        let data_config = &new_config
-                                            .transaction_costs
-                                            .data_receipt_creation_config;
-                                        data_config.base_cost.exec_fee()
-                                            + data_config.base_cost.send_fee(sender_is_receiver)
-                                            + data_receipt
-                                                .data
-                                                .as_ref()
-                                                .map(|data| data.len() as u64)
-                                                .unwrap_or(0)
-                                                * (data_config.cost_per_byte.exec_fee()
+                                            .expect("fee calculation must not fail");
+                                        let data_cost: Gas = action_receipt
+                                            .input_data_ids
+                                            .iter()
+                                            .map(|data_receipt_id| {
+                                                let data_receipt = chain_store
+                                                    .get_receipt(data_receipt_id)
+                                                    .expect("should be data receipt")
+                                                    .expect("should_be_Data_receipt");
+                                                let sender_is_receiver = data_receipt
+                                                    .predecessor_id
+                                                    == data_receipt.receiver_id;
+                                                let data_receipt = match &data_receipt.receipt {
+                                                    ReceiptEnum::Action(_) => unreachable!(),
+                                                    ReceiptEnum::Data(data_receipt) => data_receipt,
+                                                };
+                                                let data_config = &new_config
+                                                    .transaction_costs
+                                                    .data_receipt_creation_config;
+                                                data_config.base_cost.exec_fee()
                                                     + data_config
-                                                        .cost_per_byte
-                                                        .send_fee(sender_is_receiver))
+                                                        .base_cost
+                                                        .send_fee(sender_is_receiver)
+                                                    + data_receipt
+                                                        .data
+                                                        .as_ref()
+                                                        .map(|data| data.len() as u64)
+                                                        .unwrap_or(0)
+                                                        * (data_config.cost_per_byte.exec_fee()
+                                                            + data_config
+                                                                .cost_per_byte
+                                                                .send_fee(sender_is_receiver))
+                                            })
+                                            .sum();
+                                        action_cost + data_cost
                                     }
+                                    ReceiptEnum::Data(_data_receipt) => 0,
                                 }
                             })
                             .sum();
@@ -1004,7 +1022,7 @@ pub(crate) fn new_gas_params(
                                 num_cheaper += 1;
                             }
                         }
-                        println!(target: "state-viewer", "{receipt_id} new_gas={new_gas}, gas_available={gas_available}, gas_attached={gas_attached}, gas_pre_burned={gas_pre_burned}, gas_burnt={gas_burnt}");
+                        println!("{receipt_id} new_gas={new_gas}, gas_available={gas_available}, gas_attached={gas_attached}, gas_pre_burned={gas_pre_burned}, gas_burnt={gas_burnt}");
                         if new_gas <= gas_available {
                             num_ok += 1;
                         } else if new_gas <= gas_limit {
