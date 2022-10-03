@@ -17,6 +17,7 @@ use near_primitives::account::id::AccountId;
 use near_primitives::block::{Block, BlockHeader};
 use near_primitives::hash::CryptoHash;
 use near_primitives::receipt::ActionReceipt;
+use near_primitives::receipt::DataReceiver;
 use near_primitives::receipt::ReceiptEnum;
 use near_primitives::runtime::config_store::RuntimeConfigStore;
 use near_primitives::runtime::parameter_table::ParameterTable;
@@ -872,7 +873,7 @@ pub(crate) fn new_gas_params(
     gas_limit: Gas,
 ) -> anyhow::Result<()> {
     let chain_store = ChainStore::new(
-        store,
+        store.clone(),
         near_config.genesis.config.genesis_height,
         !near_config.client_config.archive,
     );
@@ -895,6 +896,29 @@ pub(crate) fn new_gas_params(
     let mut cheaper_receipts = vec![];
     let mut avoidable_err_receipts = vec![];
     let mut unavoidable_err_receipts = vec![];
+
+    let newest_block_hash = chain_store.get_block_hash_by_height(end_height + 1)?;
+    let newest_block = chain_store.get_block(&newest_block_hash)?;
+    let state_roots = vec![
+        newest_block.chunks()[0].prev_state_root(),
+        newest_block.chunks()[1].prev_state_root(),
+        newest_block.chunks()[2].prev_state_root(),
+        newest_block.chunks()[3].prev_state_root(),
+    ];
+
+    let trie_config: TrieConfig = Default::default();
+
+    let trie_storage = |shard_id: u32| {
+        let shard_uid = ShardUId { version: 1, shard_id };
+        let shard_cache = TrieCache::new(&trie_config, shard_uid, false);
+        let trie_storage =
+            TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
+        Box::new(trie_storage)
+    };
+
+    let tries = (0..4)
+        .map(|shard_id| Trie::new(trie_storage(shard_id), state_roots[shard_id as usize], None))
+        .collect::<Vec<_>>();
 
     let mut out = std::io::stdout().lock();
     for height in start_height..=end_height {
@@ -961,22 +985,20 @@ pub(crate) fn new_gas_params(
                                             )
                                             .expect("fee calculation must not fail");
                                         let data_cost: Gas = action_receipt
-                                            .input_data_ids
+                                            .output_data_receivers
                                             .iter()
-                                            .map(|data_receipt_id| {
-                                                if let Some(data_receipt) = chain_store
-                                                    .get_receipt(data_receipt_id)
-                                                    .expect("should be data receipt")
-                                                {
-                                                    let sender_is_receiver = data_receipt
-                                                        .predecessor_id
-                                                        == data_receipt.receiver_id;
-                                                    let data_receipt = match &data_receipt.receipt {
-                                                        ReceiptEnum::Action(_) => unreachable!(),
-                                                        ReceiptEnum::Data(data_receipt) => {
-                                                            data_receipt
-                                                        }
-                                                    };
+                                            .map(|DataReceiver { data_id, receiver_id }| {
+                                                if receiver_id.is_system() {
+                                                    0
+                                                } else {
+                                                    let data = near_store::get_received_data(
+                                                        &tries[chunk_header.shard_id() as usize],
+                                                        receiver_id,
+                                                        *data_id,
+                                                    )
+                                                    .expect("data must be received");
+                                                    let sender_is_receiver =
+                                                        receipt.receiver_id == *receiver_id;
                                                     let data_config = &new_config
                                                         .transaction_costs
                                                         .data_receipt_creation_config;
@@ -984,17 +1006,18 @@ pub(crate) fn new_gas_params(
                                                         + data_config
                                                             .base_cost
                                                             .send_fee(sender_is_receiver)
-                                                        + data_receipt
-                                                            .data
+                                                        + data
                                                             .as_ref()
-                                                            .map(|data| data.len() as u64)
+                                                            .and_then(|data| {
+                                                                data.data
+                                                                    .as_ref()
+                                                                    .map(|d| d.len() as u64)
+                                                            })
                                                             .unwrap_or(0)
                                                             * (data_config.cost_per_byte.exec_fee()
                                                                 + data_config
                                                                     .cost_per_byte
                                                                     .send_fee(sender_is_receiver))
-                                                } else {
-                                                    0
                                                 }
                                             })
                                             .sum();
