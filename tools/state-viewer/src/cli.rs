@@ -505,6 +505,7 @@ pub struct NewGasParamsCmd {
     #[clap(long)]
     end_height: BlockHeight,
     /// Path to file with parameter changes to test.
+    #[clap(long)]
     changes: PathBuf,
 }
 

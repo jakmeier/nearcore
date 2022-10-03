@@ -38,6 +38,7 @@ use near_store::{NodeStorage, Store};
 use nearcore::{NearConfig, NightshadeRuntime};
 use node_runtime::adapter::ViewRuntimeAdapter;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
@@ -883,6 +884,13 @@ pub(crate) fn new_gas_params(
     let mut num_unavoidable_err = 0;
     let mut out = std::io::stdout().lock();
 
+    let mut affected_accounts: BTreeMap<AccountId, (u32, u32)> = BTreeMap::new();
+    let mut cheaper_receipts = vec![];
+    let mut avoidable_err_receipts = vec![];
+    let mut unavoidable_err_receipts = vec![];
+
+    const MAX_RECEIPTS_PRINTED: usize = 10;
+
     for height in start_height..=end_height {
         let block_hash = chain_store.get_block_hash_by_height(height)?;
 
@@ -931,14 +939,24 @@ pub(crate) fn new_gas_params(
                     if let Some(gas_profile) = gas_profile {
                         let new_gas = gas_profile.gas_required(&new_params_table);
                         match new_gas.cmp(&gas_burnt) {
-                            std::cmp::Ordering::Less => num_cheaper += 1,
                             std::cmp::Ordering::Equal => num_equal += 1,
                             std::cmp::Ordering::Greater => num_more_expensive += 1,
+                            std::cmp::Ordering::Less => {
+                                if cheaper_receipts.len() > MAX_RECEIPTS_PRINTED {
+                                    cheaper_receipts.push(receipt.receipt_id);
+                                }
+                                num_cheaper += 1;
+                            }
                         }
                         if new_gas <= gas_available {
                             num_ok += 1;
                         } else if new_gas <= gas_limit {
                             num_avoidable_err += 1;
+                            affected_accounts.entry(receipt.receiver_id.clone()).or_default().0 +=
+                                1;
+                            if avoidable_err_receipts.len() > MAX_RECEIPTS_PRINTED {
+                                avoidable_err_receipts.push(receipt.receipt_id);
+                            }
                             let percent = ((new_gas as f64 / gas_burnt as f64) - 1.0) * 100.0;
                             writeln!(
                                 out,
@@ -946,6 +964,11 @@ pub(crate) fn new_gas_params(
                             )?;
                         } else {
                             num_unavoidable_err += 1;
+                            affected_accounts.entry(receipt.receiver_id.clone()).or_default().1 +=
+                                1;
+                            if unavoidable_err_receipts.len() > MAX_RECEIPTS_PRINTED {
+                                unavoidable_err_receipts.push(receipt.receipt_id);
+                            }
                             let percent = ((new_gas as f64 / gas_limit as f64) - 1.0) * 100.0;
                             writeln!(
                                 out,
@@ -974,7 +997,12 @@ pub(crate) fn new_gas_params(
             }
         }
 
-        writeln!(out, "finished block {height}, ({num_unavoidable_err}/{num_avoidable_err}/{num_ok}) (above gas limit / above old gas burnt / ok) [{num_no_profile} missing profiles]")?;
+        if (height - start_height) % 1000 == 1 {
+            writeln!(
+                out,
+                "finished block {height}, ({num_unavoidable_err}/{num_avoidable_err}/{num_ok}) (above gas limit / above old gas burnt / ok) [{num_no_profile} missing profiles]"
+            )?;
+        }
     }
 
     fn as_action_receipt(receipt: &near_primitives::receipt::Receipt) -> Option<&ActionReceipt> {
@@ -984,20 +1012,6 @@ pub(crate) fn new_gas_params(
             None
         }
     }
-    // fn contains_fn_call(receipt: &&near_primitives::receipt::Receipt) -> bool {
-    //     use near_primitives::transaction::Action;
-    //     receipt.as_action_receipt().iter().actions.iter().flat_map(as_action_receipt).any(|a| match a {
-    //         Action::FunctionCall(..) => true,
-    //         _ => false,
-    //     })
-    // }
-    // fn contains_fn_call(action_receipt: &&ActionReceipt) -> bool {
-    //     use near_primitives::transaction::Action;
-    //     action_receipt.actions.iter().any(|a| match a {
-    //         Action::FunctionCall(..) => true,
-    //         _ => false,
-    //     })
-    // }
     fn fn_calls(
         receipt: &near_primitives::receipt::Receipt,
     ) -> Option<impl Iterator<Item = &FunctionCallAction>> {
@@ -1020,6 +1034,25 @@ pub(crate) fn new_gas_params(
     writeln!(out, "{num_ok:<12} ok without user-side change")?;
     writeln!(out)?;
     writeln!(out, "{num_no_profile:<12} without profile")?;
+    writeln!(out)?;
+
+    for (account, (avoidable, unavoidable)) in affected_accounts {
+        writeln!(out, "{account:<32} {avoidable}/{unavoidable}")?;
+    }
+
+    writeln!(out)?;
+    writeln!(out, "Unavoidable error receipts:")?;
+    for hash in unavoidable_err_receipts {
+        writeln!(out, "{hash}")?;
+    }
+    writeln!(out, "Avoidable error receipts:")?;
+    for hash in avoidable_err_receipts {
+        writeln!(out, "{hash}")?;
+    }
+    writeln!(out, "Cheaper receipts:")?;
+    for hash in cheaper_receipts {
+        writeln!(out, "{hash}")?;
+    }
 
     Ok(())
 }
