@@ -5,11 +5,13 @@ use clap::{Args, Parser, Subcommand};
 use near_chain_configs::{GenesisChangeConfig, GenesisValidationMode};
 use near_primitives::account::id::AccountId;
 use near_primitives::hash::CryptoHash;
+use near_primitives::runtime::config_store::RuntimeConfigStore;
 use near_primitives::sharding::ChunkHash;
 use near_primitives::types::{BlockHeight, ShardId};
 use near_primitives::version::ProtocolVersion;
 use near_store::{Mode, Store};
 use nearcore::{load_config, NearConfig};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -74,6 +76,9 @@ pub enum StateViewerSubCommand {
     /// Print the gas profile counters for a function call receipt.
     #[clap(alias = "gas_profile")]
     GasProfile(GasProfileCmd),
+    /// Test a set of gas parameter changes against historical blocks.
+    #[clap(alias = "new_gas_params")]
+    NewGasParams(NewGasParamsCmd),
 }
 
 impl StateViewerSubCommand {
@@ -107,6 +112,7 @@ impl StateViewerSubCommand {
             StateViewerSubCommand::ApplyReceipt(cmd) => cmd.run(home_dir, near_config, hot),
             StateViewerSubCommand::ViewTrie(cmd) => cmd.run(hot),
             StateViewerSubCommand::GasProfile(cmd) => cmd.run(near_config, hot),
+            StateViewerSubCommand::NewGasParams(cmd) => cmd.run(near_config, hot),
         }
     }
 }
@@ -487,5 +493,36 @@ impl GasProfileCmd {
     pub fn run(self, near_config: NearConfig, store: Store) {
         let hash = CryptoHash::from_str(&self.receipt_id).expect("invalid receipt hash");
         gas_profile(store, near_config, hash, self.protocol_version).unwrap();
+    }
+}
+
+#[derive(Parser)]
+pub struct NewGasParamsCmd {
+    /// The start block of the checked range, inclusive.
+    #[clap(long)]
+    start_height: BlockHeight,
+    /// The end block of the checked range, inclusive.
+    #[clap(long)]
+    end_height: BlockHeight,
+    /// Path to file with parameter changes to test.
+    changes: PathBuf,
+}
+
+impl NewGasParamsCmd {
+    pub fn run(self, near_config: NearConfig, store: Store) {
+        let diff = fs::read_to_string(self.changes).expect("could not read diff file");
+        let new_params_table = RuntimeConfigStore::params_table_with_extra_diff(&diff);
+        let gas_limit = 300_000_000_000_000u64;
+
+        new_gas_params(
+            store,
+            near_config,
+            self.start_height,
+            self.end_height,
+            // &[0, 1, 2, 3],
+            &new_params_table,
+            gas_limit,
+        )
+        .unwrap();
     }
 }

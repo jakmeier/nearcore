@@ -2,7 +2,7 @@ use near_primitives_core::parameter::{FeeParameter, Parameter};
 use serde_json::json;
 use std::collections::BTreeMap;
 
-pub(crate) struct ParameterTable {
+pub struct ParameterTable {
     parameters: BTreeMap<Parameter, serde_json::Value>,
 }
 
@@ -14,7 +14,7 @@ pub(crate) struct ParameterTableDiff {
 /// Error returned by ParameterTable::from_txt() that parses a runtime
 /// configuration TXT file.
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum InvalidConfigError {
+pub enum InvalidConfigError {
     #[error("could not parse `{1}` as a parameter")]
     UnknownParameter(#[source] strum::ParseError, String),
     #[error("could not parse `{1}` as a value")]
@@ -157,7 +157,7 @@ impl ParameterTable {
         json.into()
     }
 
-    fn get(&self, key: Parameter) -> Option<&serde_json::Value> {
+    pub fn get(&self, key: Parameter) -> Option<&serde_json::Value> {
         self.parameters.get(&key)
     }
 

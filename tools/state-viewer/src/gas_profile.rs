@@ -2,7 +2,9 @@
 //! outcomes stored in RocksDB.
 
 use near_primitives::profile::Cost;
+use near_primitives::runtime::parameter_table::ParameterTable;
 use near_primitives::transaction::ExecutionOutcome;
+use near_primitives::types::Gas;
 use near_primitives_core::parameter::Parameter;
 use node_runtime::config::RuntimeConfig;
 use std::collections::BTreeMap;
@@ -62,6 +64,15 @@ pub(crate) fn extract_gas_counters(
 
             Some(GasFeeCounters { counters })
         }
+    }
+}
+
+impl GasFeeCounters {
+    pub(crate) fn gas_required(&self, params: &ParameterTable) -> Gas {
+        self.counters
+            .iter()
+            .map(|(param, counter)| params.get(*param).unwrap().as_u64().unwrap() * counter)
+            .sum()
     }
 }
 

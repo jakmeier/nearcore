@@ -16,10 +16,14 @@ use near_network::iter_peers_from_store;
 use near_primitives::account::id::AccountId;
 use near_primitives::block::{Block, BlockHeader};
 use near_primitives::hash::CryptoHash;
+use near_primitives::receipt::ActionReceipt;
+use near_primitives::receipt::ReceiptEnum;
 use near_primitives::runtime::config_store::RuntimeConfigStore;
+use near_primitives::runtime::parameter_table::ParameterTable;
 use near_primitives::shard_layout::ShardUId;
 use near_primitives::sharding::ChunkHash;
 use near_primitives::state_record::StateRecord;
+use near_primitives::transaction::FunctionCallAction;
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::{BlockHeight, ShardId, StateRoot};
@@ -851,5 +855,171 @@ pub(crate) fn gas_profile(
             }
         }
     }
+    Ok(())
+}
+
+pub(crate) fn new_gas_params(
+    store: Store,
+    near_config: NearConfig,
+    start_height: BlockHeight,
+    end_height: BlockHeight,
+    // shard_ids: &[ShardId],
+    new_params_table: &ParameterTable,
+    gas_limit: Gas,
+) -> anyhow::Result<()> {
+    let chain_store = ChainStore::new(
+        store,
+        near_config.genesis.config.genesis_height,
+        !near_config.client_config.archive,
+    );
+    let config_store = RuntimeConfigStore::new(None);
+
+    let mut num_no_profile = 0;
+    let mut num_cheaper = 0;
+    let mut num_equal = 0;
+    let mut num_more_expensive = 0;
+    let mut num_ok = 0;
+    let mut num_avoidable_err = 0;
+    let mut num_unavoidable_err = 0;
+    let mut out = std::io::stdout().lock();
+
+    for height in start_height..=end_height {
+        let block_hash = chain_store.get_block_hash_by_height(height)?;
+
+        // for &shard_id in shard_ids {
+        //     for outcome_id in
+        //         chain_store.get_outcomes_by_block_hash_and_shard_id(&block_hash, shard_id)?
+        //     {
+        //         let outcomes = chain_store.get_outcomes_by_id(&outcome_id)?;
+        //         let protocol_version = 0; //TODO
+        //         let runtime_config = config_store.get_config(protocol_version);
+        //         for outcome in outcomes {
+        //             let gas_profile = crate::gas_profile::extract_gas_counters(
+        //                 &outcome.outcome_with_id.outcome,
+        //                 runtime_config,
+        //             );
+
+        //             let mut out = std::io::stdout().lock();
+        //             match gas_profile {
+        //                 Some(profile) => {
+        //                     writeln!(out, "{profile}")?;
+        //                 }
+        //                 None => {
+        //                     writeln!(out, "No gas profile found")?;
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+
+        let block = chain_store.get_block(&block_hash)?;
+        let block_runtime_config =
+            config_store.get_config(block.header().latest_protocol_version());
+
+        for chunk_header in block.chunks().iter() {
+            let chunk = chain_store.get_chunk(&chunk_header.chunk_hash())?;
+            for receipt in chunk.receipts().iter() {
+                let receipt_id = receipt.receipt_id;
+                for outcome in chain_store.get_outcomes_by_id(&receipt_id)? {
+                    let gas_burnt = outcome.outcome_with_id.outcome.gas_burnt;
+                    let gas_available: u64 =
+                        fn_calls(receipt).into_iter().flatten().map(|func| func.gas).sum();
+                    let gas_profile = crate::gas_profile::extract_gas_counters(
+                        &outcome.outcome_with_id.outcome,
+                        block_runtime_config,
+                    );
+                    if let Some(gas_profile) = gas_profile {
+                        let new_gas = gas_profile.gas_required(&new_params_table);
+                        match new_gas.cmp(&gas_burnt) {
+                            std::cmp::Ordering::Less => num_cheaper += 1,
+                            std::cmp::Ordering::Equal => num_equal += 1,
+                            std::cmp::Ordering::Greater => num_more_expensive += 1,
+                        }
+                        if new_gas <= gas_available {
+                            num_ok += 1;
+                        } else if new_gas <= gas_limit {
+                            num_avoidable_err += 1;
+                            let percent = ((new_gas as f64 / gas_burnt as f64) - 1.0) * 100.0;
+                            writeln!(
+                                out,
+                                "{receipt_id:?} OK but exceeds old gas burnt by {percent:.3}% ({gas_limit} > {new_gas} > {gas_available})"
+                            )?;
+                        } else {
+                            num_unavoidable_err += 1;
+                            let percent = ((new_gas as f64 / gas_limit as f64) - 1.0) * 100.0;
+                            writeln!(
+                                out,
+                                "{receipt_id:?} exceeds gas limit by {percent:.3}% ({new_gas} > {gas_limit} > {gas_available})"
+                            )?;
+                        }
+                    } else if gas_available > 0 {
+                        num_no_profile += 1;
+                        writeln!(out, "missing gas profile {receipt_id:?}")?;
+                    }
+
+                    // if let Some(fns) = fn_calls(receipt) {}
+                    // for fn_call_action in .iter().flatten() {
+                    //     gas_available += fn_call_action.gas;
+
+                    //     // match gas_profile {
+                    //     //     Some(profile) => {
+                    //     //         writeln!(out, "{profile}")?;
+                    //     //     }
+                    //     //     None => {
+                    //     //         writeln!(out, "No gas profile found")?;
+                    //     //     }
+                    //     // }
+                    // }
+                }
+            }
+        }
+
+        writeln!(out, "finished block {height}, ({num_unavoidable_err}/{num_avoidable_err}/{num_ok}) (above gas limit / above old gas burnt / ok) [{num_no_profile} missing profiles]")?;
+    }
+
+    fn as_action_receipt(receipt: &near_primitives::receipt::Receipt) -> Option<&ActionReceipt> {
+        if let ReceiptEnum::Action(action_receipt) = &receipt.receipt {
+            Some(action_receipt)
+        } else {
+            None
+        }
+    }
+    // fn contains_fn_call(receipt: &&near_primitives::receipt::Receipt) -> bool {
+    //     use near_primitives::transaction::Action;
+    //     receipt.as_action_receipt().iter().actions.iter().flat_map(as_action_receipt).any(|a| match a {
+    //         Action::FunctionCall(..) => true,
+    //         _ => false,
+    //     })
+    // }
+    // fn contains_fn_call(action_receipt: &&ActionReceipt) -> bool {
+    //     use near_primitives::transaction::Action;
+    //     action_receipt.actions.iter().any(|a| match a {
+    //         Action::FunctionCall(..) => true,
+    //         _ => false,
+    //     })
+    // }
+    fn fn_calls(
+        receipt: &near_primitives::receipt::Receipt,
+    ) -> Option<impl Iterator<Item = &FunctionCallAction>> {
+        use near_primitives::transaction::Action;
+        Some(as_action_receipt(receipt)?.actions.iter().flat_map(|a| match a {
+            Action::FunctionCall(fn_call_action) => Some(fn_call_action),
+            _ => None,
+        }))
+    }
+
+    writeln!(out)?;
+    writeln!(out, "Summary for checked range {start_height} - {end_height}")?;
+    writeln!(out)?;
+    writeln!(out, "{num_cheaper:<12} became cheaper")?;
+    writeln!(out, "{num_equal:<12} same amount of gas")?;
+    writeln!(out, "{num_more_expensive:<12} more expensive")?;
+    writeln!(out)?;
+    writeln!(out, "{num_unavoidable_err:<12} exceeding gas limit of {gas_limit}")?;
+    writeln!(out, "{num_avoidable_err:<12} need more gas attached")?;
+    writeln!(out, "{num_ok:<12} ok without user-side change")?;
+    writeln!(out)?;
+    writeln!(out, "{num_no_profile:<12} without profile")?;
+
     Ok(())
 }

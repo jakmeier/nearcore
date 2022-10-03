@@ -101,6 +101,25 @@ impl RuntimeConfigStore {
             })
             .1
     }
+
+    pub fn params_table_with_extra_diff(extra_diff: &str) -> ParameterTable {
+        let mut params: ParameterTable =
+            BASE_CONFIG.parse().expect("Failed parsing base parameter file.");
+
+        for (protocol_version, diff_bytes) in CONFIG_DIFFS {
+            let diff :ParameterTableDiff= diff_bytes.parse().unwrap_or_else(|err| panic!("Failed parsing runtime parameters diff for version {protocol_version}. Error: {err}"));
+            params.apply_diff(diff).unwrap_or_else(|err| panic!("Failed applying diff to `RuntimeConfig` for version {protocol_version}. Error: {err}"));
+        }
+
+        let diff: ParameterTableDiff = extra_diff.parse().unwrap_or_else(|err| {
+            panic!("Failed parsing extra runtime parameters diff. Error: {err}")
+        });
+        params.apply_diff(diff).unwrap_or_else(|err| {
+            panic!("Failed applying extra diff to `RuntimeConfig`. Error: {err}")
+        });
+
+        params
+    }
 }
 
 #[cfg(test)]
