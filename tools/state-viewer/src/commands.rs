@@ -47,6 +47,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tracing::log::debug;
 
 pub(crate) fn peers(store: NodeStorage) {
     iter_peers_from_store(store, |(peer_id, peer_info)| {
@@ -939,6 +940,9 @@ pub(crate) fn new_gas_params(
                                     .get_receipt(outgoing_receipt_id)
                                     .expect("outgoing receipt must exist")
                                     .expect("outgoing receipt must exist");
+                                if outgoing_receipt.predecessor_id.is_system() {
+                                    return 0;
+                                }
                                 let sender_is_receiver =
                                     outgoing_receipt.predecessor_id == outgoing_receipt.receiver_id;
                                 match &outgoing_receipt.receipt {
@@ -946,7 +950,7 @@ pub(crate) fn new_gas_params(
                                         new_config
                                             .transaction_costs
                                             .action_receipt_creation_config
-                                            .exec_fee()
+                                            .send_fee(sender_is_receiver)
                                             + total_send_fees(
                                                 &new_config.transaction_costs,
                                                 sender_is_receiver,
@@ -998,6 +1002,7 @@ pub(crate) fn new_gas_params(
                                 num_cheaper += 1;
                             }
                         }
+                        debug!(target: "state-viewer", "{receipt_id} new_gas={new_gas}, gas_available={gas_available}, gas_attached={gas_attached}, gas_pre_burned={gas_pre_burned}, gas_burnt={gas_burnt}");
                         if new_gas <= gas_available {
                             num_ok += 1;
                         } else if new_gas <= gas_limit {
