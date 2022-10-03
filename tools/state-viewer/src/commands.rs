@@ -38,6 +38,7 @@ use near_store::{NodeStorage, Store};
 use nearcore::{NearConfig, NightshadeRuntime};
 use node_runtime::adapter::ViewRuntimeAdapter;
 use node_runtime::config::total_prepaid_exec_fees;
+use node_runtime::config::total_send_fees;
 use node_runtime::config::RuntimeConfig;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -927,7 +928,57 @@ pub(crate) fn new_gas_params(
                             block_protocol_version,
                         )?;
                         let gas_available = gas_attached + gas_pre_burned;
-                        let new_gas = gas_profile.gas_required(&new_params_table) + gas_pre_burned;
+
+                        let outoing_send_gas: Gas = outcome
+                            .outcome_with_id
+                            .outcome
+                            .receipt_ids
+                            .iter()
+                            .map(|outgoing_receipt_id| {
+                                let outgoing_receipt = chain_store
+                                    .get_receipt(outgoing_receipt_id)
+                                    .expect("outgoing receipt must exist")
+                                    .expect("outgoing receipt must exist");
+                                let sender_is_receiver =
+                                    outgoing_receipt.predecessor_id == outgoing_receipt.receiver_id;
+                                match &outgoing_receipt.receipt {
+                                    ReceiptEnum::Action(action_receipt) => {
+                                        new_config
+                                            .transaction_costs
+                                            .action_receipt_creation_config
+                                            .exec_fee()
+                                            + total_send_fees(
+                                                &new_config.transaction_costs,
+                                                sender_is_receiver,
+                                                &action_receipt.actions,
+                                                &outgoing_receipt.receiver_id,
+                                                block_protocol_version,
+                                            )
+                                            .expect("fee calculation must not fail")
+                                    }
+                                    ReceiptEnum::Data(data_receipt) => {
+                                        let data_config = &new_config
+                                            .transaction_costs
+                                            .data_receipt_creation_config;
+                                        data_config.base_cost.exec_fee()
+                                            + data_config.base_cost.send_fee(sender_is_receiver)
+                                            + data_receipt
+                                                .data
+                                                .as_ref()
+                                                .map(|data| data.len() as u64)
+                                                .unwrap_or(0)
+                                                * (data_config.cost_per_byte.exec_fee()
+                                                    + data_config
+                                                        .cost_per_byte
+                                                        .send_fee(sender_is_receiver))
+                                    }
+                                }
+                            })
+                            .sum();
+
+                        let new_gas = gas_profile.gas_required(&new_params_table)
+                            + gas_pre_burned
+                            + outoing_send_gas;
                         match new_gas.cmp(&gas_burnt) {
                             std::cmp::Ordering::Equal => num_equal += 1,
                             std::cmp::Ordering::Greater => {
