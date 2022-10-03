@@ -886,8 +886,8 @@ pub(crate) fn new_gas_params(
     let mut total_gas_cheaper = 0;
     let mut total_gas_more_expensive = 0;
 
-    let mut affected_accounts: BTreeMap<AccountId, (u32, u32)> = BTreeMap::new();
-    const MAX_RECEIPTS_PRINTED: usize = 10;
+    let mut affected_accounts: BTreeMap<AccountId, (u32, u32, u32)> = BTreeMap::new();
+    const MAX_RECEIPTS_PRINTED: usize = 3;
     let mut cheaper_receipts = vec![];
     let mut avoidable_err_receipts = vec![];
     let mut unavoidable_err_receipts = vec![];
@@ -895,32 +895,6 @@ pub(crate) fn new_gas_params(
     let mut out = std::io::stdout().lock();
     for height in start_height..=end_height {
         let block_hash = chain_store.get_block_hash_by_height(height)?;
-
-        // for &shard_id in shard_ids {
-        //     for outcome_id in
-        //         chain_store.get_outcomes_by_block_hash_and_shard_id(&block_hash, shard_id)?
-        //     {
-        //         let outcomes = chain_store.get_outcomes_by_id(&outcome_id)?;
-        //         let protocol_version = 0; //TODO
-        //         let runtime_config = config_store.get_config(protocol_version);
-        //         for outcome in outcomes {
-        //             let gas_profile = crate::gas_profile::extract_gas_counters(
-        //                 &outcome.outcome_with_id.outcome,
-        //                 runtime_config,
-        //             );
-
-        //             let mut out = std::io::stdout().lock();
-        //             match gas_profile {
-        //                 Some(profile) => {
-        //                     writeln!(out, "{profile}")?;
-        //                 }
-        //                 None => {
-        //                     writeln!(out, "No gas profile found")?;
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
 
         let block = chain_store.get_block(&block_hash)?;
         let block_runtime_config =
@@ -949,6 +923,11 @@ pub(crate) fn new_gas_params(
                             std::cmp::Ordering::Less => {
                                 if cheaper_receipts.len() < MAX_RECEIPTS_PRINTED {
                                     cheaper_receipts.push(receipt.receipt_id);
+                                }
+                                if let Some(counters) =
+                                    affected_accounts.get_mut(&receipt.receiver_id)
+                                {
+                                    counters.2 += 1;
                                 }
                                 total_gas_cheaper += gas_burnt - new_gas;
                                 num_cheaper += 1;
@@ -1014,15 +993,15 @@ pub(crate) fn new_gas_params(
         }))
     }
 
-    let avg_cheaper = total_gas_cheaper as f64 / num_cheaper as f64;
-    let avg_expensive = total_gas_more_expensive as f64 / num_more_expensive as f64;
+    let avg_cheaper = total_gas_cheaper as f64 / num_cheaper as f64 / 10e12;
+    let avg_expensive = total_gas_more_expensive as f64 / num_more_expensive as f64 / 10e12;
 
     writeln!(out)?;
     writeln!(out, "Summary for checked range {start_height} - {end_height}")?;
     writeln!(out)?;
-    writeln!(out, "{num_cheaper:<12} became cheaper, {avg_cheaper:.1} gas on average")?;
+    writeln!(out, "{num_cheaper:<12} became cheaper, {avg_cheaper:.3} Tgas on average")?;
     writeln!(out, "{num_equal:<12} same amount of gas")?;
-    writeln!(out, "{num_more_expensive:<12} more expensive, {avg_expensive:.1} gas on average")?;
+    writeln!(out, "{num_more_expensive:<12} more expensive, {avg_expensive:.3} Tgas on average")?;
     writeln!(out)?;
     writeln!(out, "{num_unavoidable_err:<12} exceeding gas limit of {gas_limit}")?;
     writeln!(out, "{num_avoidable_err:<12} need more gas attached")?;
@@ -1031,8 +1010,15 @@ pub(crate) fn new_gas_params(
     writeln!(out, "{num_no_profile:<12} without profile")?;
     writeln!(out)?;
 
-    for (account, (avoidable, unavoidable)) in affected_accounts {
-        writeln!(out, "{account:<32} {avoidable}/{unavoidable}")?;
+    if !affected_accounts.is_empty() {
+        writeln!(
+            out,
+            "{:32} {:12}/{:12}   {}",
+            "List of broken receivers", "avoidable", "unavoidable", "cheaper"
+        )?;
+    }
+    for (account, (avoidable, unavoidable, cheaper)) in affected_accounts {
+        writeln!(out, "{account:<32} {avoidable:>12}/{unavoidable:<12}   {cheaper}")?;
     }
 
     writeln!(out)?;
@@ -1040,10 +1026,12 @@ pub(crate) fn new_gas_params(
     for hash in unavoidable_err_receipts {
         writeln!(out, "{hash}")?;
     }
+    writeln!(out)?;
     writeln!(out, "Avoidable error receipts:")?;
     for hash in avoidable_err_receipts {
         writeln!(out, "{hash}")?;
     }
+    writeln!(out)?;
     writeln!(out, "Cheaper receipts:")?;
     for hash in cheaper_receipts {
         writeln!(out, "{hash}")?;
