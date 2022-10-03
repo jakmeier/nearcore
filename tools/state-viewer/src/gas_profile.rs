@@ -62,6 +62,22 @@ pub(crate) fn extract_gas_counters(
             // For now it is not clear if implementing this is even worth it.
             // Alternatively, we could also make the profile data more detailed.
 
+            // special case: value return, this can be done easily
+            let num_value_return = meta_data[Cost::ActionCost {
+                action_cost_kind: near_primitives::config::ActionCosts::value_return,
+            }] / 2
+                / runtime_config
+                    .transaction_costs
+                    .data_receipt_creation_config
+                    .cost_per_byte
+                    .exec_fee() as u64;
+            if num_value_return != 0 {
+                *counters.entry(Parameter::DataReceiptCreationPerByteExecution).or_default() +=
+                    num_value_return;
+                *counters.entry(Parameter::DataReceiptCreationPerByteSendNotSir).or_default() +=
+                    num_value_return;
+            }
+
             Some(GasFeeCounters { counters })
         }
     }
