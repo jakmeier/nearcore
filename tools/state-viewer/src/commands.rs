@@ -964,33 +964,38 @@ pub(crate) fn new_gas_params(
                                             .input_data_ids
                                             .iter()
                                             .map(|data_receipt_id| {
-                                                let data_receipt = chain_store
+                                                if let Some(data_receipt) = chain_store
                                                     .get_receipt(data_receipt_id)
                                                     .expect("should be data receipt")
-                                                    .expect("should_be_Data_receipt");
-                                                let sender_is_receiver = data_receipt
-                                                    .predecessor_id
-                                                    == data_receipt.receiver_id;
-                                                let data_receipt = match &data_receipt.receipt {
-                                                    ReceiptEnum::Action(_) => unreachable!(),
-                                                    ReceiptEnum::Data(data_receipt) => data_receipt,
-                                                };
-                                                let data_config = &new_config
-                                                    .transaction_costs
-                                                    .data_receipt_creation_config;
-                                                data_config.base_cost.exec_fee()
-                                                    + data_config
-                                                        .base_cost
-                                                        .send_fee(sender_is_receiver)
-                                                    + data_receipt
-                                                        .data
-                                                        .as_ref()
-                                                        .map(|data| data.len() as u64)
-                                                        .unwrap_or(0)
-                                                        * (data_config.cost_per_byte.exec_fee()
-                                                            + data_config
-                                                                .cost_per_byte
-                                                                .send_fee(sender_is_receiver))
+                                                {
+                                                    let sender_is_receiver = data_receipt
+                                                        .predecessor_id
+                                                        == data_receipt.receiver_id;
+                                                    let data_receipt = match &data_receipt.receipt {
+                                                        ReceiptEnum::Action(_) => unreachable!(),
+                                                        ReceiptEnum::Data(data_receipt) => {
+                                                            data_receipt
+                                                        }
+                                                    };
+                                                    let data_config = &new_config
+                                                        .transaction_costs
+                                                        .data_receipt_creation_config;
+                                                    data_config.base_cost.exec_fee()
+                                                        + data_config
+                                                            .base_cost
+                                                            .send_fee(sender_is_receiver)
+                                                        + data_receipt
+                                                            .data
+                                                            .as_ref()
+                                                            .map(|data| data.len() as u64)
+                                                            .unwrap_or(0)
+                                                            * (data_config.cost_per_byte.exec_fee()
+                                                                + data_config
+                                                                    .cost_per_byte
+                                                                    .send_fee(sender_is_receiver))
+                                                } else {
+                                                    0
+                                                }
                                             })
                                             .sum();
                                         action_cost + data_cost
