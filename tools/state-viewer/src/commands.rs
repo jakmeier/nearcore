@@ -911,6 +911,10 @@ pub(crate) fn new_gas_params(
                     let gas_burnt = outcome.outcome_with_id.outcome.gas_burnt;
                     let gas_available: u64 =
                         fn_calls(receipt).into_iter().flatten().map(|func| func.gas).sum();
+                    if gas_available == 0 {
+                        // Not a fn call, skip.
+                        continue;
+                    }
                     let gas_profile = crate::gas_profile::extract_gas_counters(
                         &outcome.outcome_with_id.outcome,
                         block_runtime_config,
