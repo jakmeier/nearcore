@@ -1,7 +1,7 @@
 //! State viewer functions to read gas profile information from execution
 //! outcomes stored in RocksDB.
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use near_chain::{ChainStore, ChainStoreAccess};
 use near_primitives::hash::CryptoHash;
 use near_primitives::profile::Cost;
@@ -167,7 +167,7 @@ impl GasParameterChangeChecker {
                 stats.num_missing_blocks += 1;
                 return Ok(());
             }
-            Err(e) => panic!("unexpected error when looking up block hash {e}"),
+            Err(e) => bail!("unexpected error when looking up block hash {e}"),
         };
         let block = self.chain_store.get_block(&block_hash)?;
         let block_protocol_version = block.header().latest_protocol_version();
@@ -215,7 +215,7 @@ impl GasParameterChangeChecker {
                 error!(target: "state_viewer", "{err}");
             }
             Ok(None) => {
-                stats.num_missing_blocks += 1;
+                // not a function call, just continue
             }
             Ok(Some(GasCostChange::Equal)) => stats.num_equal += 1,
             Ok(Some(GasCostChange::Cheaper { change })) => {
@@ -291,20 +291,19 @@ impl GasParameterChangeChecker {
                 )?;
         let gas_available = gas_attached + gas_pre_burned;
 
-        let outgoing_send_gas: Gas = outcome
-            .outcome_with_id
-            .outcome
-            .receipt_ids
-            .iter()
-            .map(|outgoing_receipt_id| {
+        let outgoing_send_gas: Gas = outcome.outcome_with_id.outcome.receipt_ids.iter().try_fold(
+            0,
+            |acc, outgoing_receipt_id| {
                 let maybe_outgoing_receipt = self
                     .chain_store
                     .get_receipt(outgoing_receipt_id)
-                    .expect("DB err for outgoing receipt");
+                    .context("DB err for outgoing receipt")?;
                 if maybe_outgoing_receipt.is_none() {}
                 let outgoing_receipt = match maybe_outgoing_receipt {
-                    Some(receipt) if receipt.predecessor_id.is_system() => return 0,
-                    None => return 0,
+                    Some(receipt) if receipt.predecessor_id.is_system() => {
+                        return Ok::<Gas, anyhow::Error>(acc)
+                    }
+                    None => return Ok(acc),
                     Some(receipt) => receipt,
                 };
                 let sender_is_receiver =
@@ -323,35 +322,15 @@ impl GasParameterChangeChecker {
                                 &outgoing_receipt.receiver_id,
                                 block_protocol_version,
                             )
-                            .expect("fee calculation must not fail");
-                        let data_cost: Gas = action_receipt
-                            .output_data_receivers
-                            .iter()
-                            .map(|DataReceiver { data_id, receiver_id }| {
-                                let data =
-                                    near_store::get_received_data(trie, receiver_id, *data_id)
-                                        .expect("data must be received");
-                                let sender_is_receiver = receipt.receiver_id == *receiver_id;
-                                let data_config =
-                                    &self.new_config.transaction_costs.data_receipt_creation_config;
-                                data_config.base_cost.exec_fee()
-                                    + data_config.base_cost.send_fee(sender_is_receiver)
-                                    + data
-                                        .as_ref()
-                                        .and_then(|data| data.data.as_ref().map(|d| d.len() as u64))
-                                        .unwrap_or(0)
-                                        * (data_config.cost_per_byte.exec_fee()
-                                            + data_config
-                                                .cost_per_byte
-                                                .send_fee(sender_is_receiver))
-                            })
-                            .sum();
-                        action_cost + data_cost
+                            .context("fee calculation must not fail")?;
+                        let data_cost =
+                            self.action_receipt_data_cost(action_receipt, trie, receipt)?;
+                        Ok(acc + action_cost + data_cost)
                     }
-                    ReceiptEnum::Data(_data_receipt) => 0,
+                    ReceiptEnum::Data(_data_receipt) => Ok(acc),
                 }
-            })
-            .sum();
+            },
+        )?;
 
         let new_gas =
             gas_profile.gas_required(&self.new_params_table) + gas_pre_burned + outgoing_send_gas;
@@ -383,6 +362,33 @@ impl GasParameterChangeChecker {
             std::cmp::Ordering::Less => GasCostChange::Cheaper { change: gas_burnt - new_gas },
         };
         Ok(Some(change))
+    }
+
+    /// gas cost for data dependencies of a new action receipt
+    fn action_receipt_data_cost(
+        &self,
+        action_receipt: &ActionReceipt,
+        trie: &Trie,
+        receipt: &Receipt,
+    ) -> anyhow::Result<Gas> {
+        action_receipt.output_data_receivers.iter().try_fold(
+            0,
+            |acc, DataReceiver { data_id, receiver_id }| {
+                let data = near_store::get_received_data(trie, receiver_id, *data_id)
+                    .context("data must be received")?;
+                let sender_is_receiver = receipt.receiver_id == *receiver_id;
+                let data_config = &self.new_config.transaction_costs.data_receipt_creation_config;
+                let cost = data_config.base_cost.exec_fee()
+                    + data_config.base_cost.send_fee(sender_is_receiver)
+                    + data
+                        .as_ref()
+                        .and_then(|data| data.data.as_ref().map(|d| d.len() as u64))
+                        .unwrap_or(acc)
+                        * (data_config.cost_per_byte.exec_fee()
+                            + data_config.cost_per_byte.send_fee(sender_is_receiver));
+                Ok(acc + cost)
+            },
+        )
     }
 }
 
