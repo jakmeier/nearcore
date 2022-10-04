@@ -425,7 +425,7 @@ impl std::fmt::Display for GasFeeCounters {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct ParamChangeStats {
     pub num_equal: u64,
     pub num_avoidable_err: u64,
@@ -441,10 +441,24 @@ pub(crate) struct ParamChangeStats {
     pub cheaper_receipts: Vec<CryptoHash>,
     pub avoidable_err_receipts: Vec<CryptoHash>,
     pub unavoidable_err_receipts: Vec<CryptoHash>,
+    /// used for printing intermediate results
+    pub print_delay_counter: u64,
 }
 
 impl ParamChangeStats {
-    pub(crate) fn single_line_summary(&self) -> String {
+    pub(crate) fn print_occasionally(&mut self, print_every: u64) -> Option<String> {
+        if print_every == 0 {
+            return None;
+        }
+        if print_every <= self.print_delay_counter {
+            self.print_delay_counter = 0;
+            Some(self.single_line_summary())
+        } else {
+            self.print_delay_counter += 1;
+            None
+        }
+    }
+    fn single_line_summary(&self) -> String {
         let unavoidable_err = self.num_unavoidable_err;
         let avoidable_err = self.num_avoidable_err;
         let ok = self.ok();
@@ -455,6 +469,31 @@ impl ParamChangeStats {
         self.num_cheaper + self.num_equal + self.num_more_expensive
             - self.num_avoidable_err
             - self.num_unavoidable_err
+    }
+
+    pub(crate) fn merge(mut self, other: Self) -> Self {
+        self.affected_accounts.extend(other.affected_accounts);
+        self.cheaper_receipts.extend(other.cheaper_receipts);
+        self.avoidable_err_receipts.extend(other.avoidable_err_receipts);
+        self.unavoidable_err_receipts.extend(other.unavoidable_err_receipts);
+
+        ParamChangeStats {
+            num_equal: self.num_equal + other.num_equal,
+            num_avoidable_err: self.num_avoidable_err + other.num_avoidable_err,
+            num_unavoidable_err: self.num_unavoidable_err + other.num_unavoidable_err,
+            num_cheaper: self.num_cheaper + other.num_cheaper,
+            num_more_expensive: self.num_more_expensive + other.num_more_expensive,
+            total_gas_cheaper: self.total_gas_cheaper + other.total_gas_cheaper,
+            total_gas_more_expensive: self.total_gas_more_expensive
+                + other.total_gas_more_expensive,
+            num_replay_errors: self.num_replay_errors + other.num_replay_errors,
+            num_missing_blocks: self.num_missing_blocks + other.num_missing_blocks,
+            affected_accounts: self.affected_accounts,
+            cheaper_receipts: self.cheaper_receipts,
+            avoidable_err_receipts: self.avoidable_err_receipts,
+            unavoidable_err_receipts: self.unavoidable_err_receipts,
+            print_delay_counter: self.print_delay_counter + other.print_delay_counter,
+        }
     }
 }
 

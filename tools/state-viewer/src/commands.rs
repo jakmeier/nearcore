@@ -37,6 +37,8 @@ use near_store::TrieConfig;
 use near_store::{NodeStorage, Store};
 use nearcore::{NearConfig, NightshadeRuntime};
 use node_runtime::adapter::ViewRuntimeAdapter;
+use rayon::prelude::IntoParallelIterator;
+use rayon::prelude::ParallelIterator;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -866,22 +868,37 @@ pub(crate) fn new_gas_params(
     new_params_table: ParameterTable,
     gas_limit: Gas,
 ) -> anyhow::Result<()> {
-    let gas_param_checker =
-        GasParameterChangeChecker::new(&store, &near_config, gas_limit, new_params_table)?;
-
-    let mut stats = ParamChangeStats::default();
-    for height in start_height..=end_height {
-        gas_param_checker.collect_gas_changes_in_block(height, &mut stats)?;
-
-        if (height - start_height) % 1000 == 1 {
-            println!("finished block {height}: {}", stats.single_line_summary());
-        }
-    }
+    let final_stats = (start_height..=end_height)
+        .into_par_iter()
+        .map_init(
+            || {
+                GasParameterChangeChecker::new(
+                    &store,
+                    &near_config,
+                    gas_limit,
+                    new_params_table.clone(),
+                )
+                .unwrap()
+            },
+            |gas_param_checker, height| {
+                let mut stats = ParamChangeStats::default();
+                gas_param_checker.collect_gas_changes_in_block(height, &mut stats)?;
+                Ok::<ParamChangeStats, anyhow::Error>(stats)
+            },
+        )
+        .try_reduce_with(|left, right| {
+            let mut stats = left.merge(right);
+            if let Some(summary) = stats.print_occasionally(1000) {
+                println!("progress of a rayon thread: {summary}");
+            }
+            Ok(stats)
+        })
+        .unwrap()?;
 
     println!();
     println!("Summary for checked range {start_height} - {end_height}");
     println!();
-    println!("{stats}");
+    println!("{final_stats}");
 
     Ok(())
 }

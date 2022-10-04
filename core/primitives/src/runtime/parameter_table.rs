@@ -2,6 +2,7 @@ use near_primitives_core::parameter::{FeeParameter, Parameter};
 use serde_json::json;
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub struct ParameterTable {
     parameters: BTreeMap<Parameter, serde_json::Value>,
 }
