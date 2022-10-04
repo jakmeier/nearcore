@@ -967,13 +967,17 @@ pub(crate) fn new_gas_params(
                             .receipt_ids
                             .iter()
                             .map(|outgoing_receipt_id| {
-                                let outgoing_receipt = chain_store
+                                let maybe_outgoing_receipt = chain_store
                                     .get_receipt(outgoing_receipt_id)
-                                    .expect("outgoing receipt must exist")
-                                    .expect("outgoing receipt must exist");
-                                if outgoing_receipt.predecessor_id.is_system() {
-                                    return 0;
-                                }
+                                    .expect("DB err for outgoing receipt");
+                                if maybe_outgoing_receipt.is_none() {}
+                                let outgoing_receipt = match maybe_outgoing_receipt {
+                                    Some(receipt) if receipt.predecessor_id.is_system() => {
+                                        return 0
+                                    }
+                                    None => return 0,
+                                    Some(receipt) => receipt,
+                                };
                                 let sender_is_receiver =
                                     outgoing_receipt.predecessor_id == outgoing_receipt.receiver_id;
                                 match &outgoing_receipt.receipt {
