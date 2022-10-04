@@ -872,6 +872,8 @@ pub(crate) fn new_gas_params(
     new_params_table: &ParameterTable,
     gas_limit: Gas,
 ) -> anyhow::Result<()> {
+    let debug = false;
+
     let chain_store = ChainStore::new(
         store.clone(),
         near_config.genesis.config.genesis_height,
@@ -922,7 +924,11 @@ pub(crate) fn new_gas_params(
 
     let mut out = std::io::stdout().lock();
     for height in start_height..=end_height {
-        let block_hash = chain_store.get_block_hash_by_height(height)?;
+        let block_hash = match chain_store.get_block_hash_by_height(height) {
+            Ok(hash) => hash,
+            Err(Error::DBNotFoundErr(..)) => continue,
+            Err(e) => panic!("unexpected error when looking up block hash {e}"),
+        };
 
         let block = chain_store.get_block(&block_hash)?;
         let block_protocol_version = block.header().latest_protocol_version();
@@ -988,37 +994,33 @@ pub(crate) fn new_gas_params(
                                             .output_data_receivers
                                             .iter()
                                             .map(|DataReceiver { data_id, receiver_id }| {
-                                                if receiver_id.is_system() {
-                                                    0
-                                                } else {
-                                                    let data = near_store::get_received_data(
-                                                        &tries[chunk_header.shard_id() as usize],
-                                                        receiver_id,
-                                                        *data_id,
-                                                    )
-                                                    .expect("data must be received");
-                                                    let sender_is_receiver =
-                                                        receipt.receiver_id == *receiver_id;
-                                                    let data_config = &new_config
-                                                        .transaction_costs
-                                                        .data_receipt_creation_config;
-                                                    data_config.base_cost.exec_fee()
-                                                        + data_config
-                                                            .base_cost
-                                                            .send_fee(sender_is_receiver)
-                                                        + data
-                                                            .as_ref()
-                                                            .and_then(|data| {
-                                                                data.data
-                                                                    .as_ref()
-                                                                    .map(|d| d.len() as u64)
-                                                            })
-                                                            .unwrap_or(0)
-                                                            * (data_config.cost_per_byte.exec_fee()
-                                                                + data_config
-                                                                    .cost_per_byte
-                                                                    .send_fee(sender_is_receiver))
-                                                }
+                                                let data = near_store::get_received_data(
+                                                    &tries[chunk_header.shard_id() as usize],
+                                                    receiver_id,
+                                                    *data_id,
+                                                )
+                                                .expect("data must be received");
+                                                let sender_is_receiver =
+                                                    receipt.receiver_id == *receiver_id;
+                                                let data_config = &new_config
+                                                    .transaction_costs
+                                                    .data_receipt_creation_config;
+                                                data_config.base_cost.exec_fee()
+                                                    + data_config
+                                                        .base_cost
+                                                        .send_fee(sender_is_receiver)
+                                                    + data
+                                                        .as_ref()
+                                                        .and_then(|data| {
+                                                            data.data
+                                                                .as_ref()
+                                                                .map(|d| d.len() as u64)
+                                                        })
+                                                        .unwrap_or(0)
+                                                        * (data_config.cost_per_byte.exec_fee()
+                                                            + data_config
+                                                                .cost_per_byte
+                                                                .send_fee(sender_is_receiver))
                                             })
                                             .sum();
                                         action_cost + data_cost
@@ -1050,7 +1052,9 @@ pub(crate) fn new_gas_params(
                                 num_cheaper += 1;
                             }
                         }
-                        println!("{receipt_id} new_gas={new_gas}, gas_available={gas_available}, gas_attached={gas_attached}, gas_pre_burned={gas_pre_burned}, gas_burnt={gas_burnt}");
+                        if debug {
+                            eprintln!("{receipt_id} new_gas={new_gas}, gas_available={gas_available}, gas_attached={gas_attached}, gas_pre_burned={gas_pre_burned}, gas_burnt={gas_burnt}");
+                        }
                         if new_gas <= gas_available {
                             num_ok += 1;
                         } else if new_gas <= gas_limit {
