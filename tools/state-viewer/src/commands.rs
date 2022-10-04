@@ -1,4 +1,6 @@
 use crate::apply_chain_range::apply_chain_range;
+use crate::gas_profile::GasParameterChangeChecker;
+use crate::gas_profile::ParamChangeStats;
 use crate::state_dump::state_dump;
 use crate::state_dump::state_dump_redis;
 use crate::tx_dump::dump_tx_from_block;
@@ -16,15 +18,12 @@ use near_network::iter_peers_from_store;
 use near_primitives::account::id::AccountId;
 use near_primitives::block::{Block, BlockHeader};
 use near_primitives::hash::CryptoHash;
-use near_primitives::receipt::ActionReceipt;
-use near_primitives::receipt::DataReceiver;
-use near_primitives::receipt::ReceiptEnum;
+
 use near_primitives::runtime::config_store::RuntimeConfigStore;
 use near_primitives::runtime::parameter_table::ParameterTable;
 use near_primitives::shard_layout::ShardUId;
 use near_primitives::sharding::ChunkHash;
 use near_primitives::state_record::StateRecord;
-use near_primitives::transaction::FunctionCallAction;
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::chunk_extra::ChunkExtra;
 use near_primitives::types::{BlockHeight, ShardId, StateRoot};
@@ -38,11 +37,7 @@ use near_store::TrieConfig;
 use near_store::{NodeStorage, Store};
 use nearcore::{NearConfig, NightshadeRuntime};
 use node_runtime::adapter::ViewRuntimeAdapter;
-use node_runtime::config::total_prepaid_exec_fees;
-use node_runtime::config::total_send_fees;
-use node_runtime::config::RuntimeConfig;
 use serde_json::json;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
@@ -868,300 +863,25 @@ pub(crate) fn new_gas_params(
     near_config: NearConfig,
     start_height: BlockHeight,
     end_height: BlockHeight,
-    // shard_ids: &[ShardId],
-    new_params_table: &ParameterTable,
+    new_params_table: ParameterTable,
     gas_limit: Gas,
 ) -> anyhow::Result<()> {
-    let debug = false;
+    let gas_param_checker =
+        GasParameterChangeChecker::new(&store, &near_config, gas_limit, new_params_table)?;
 
-    let chain_store = ChainStore::new(
-        store.clone(),
-        near_config.genesis.config.genesis_height,
-        !near_config.client_config.archive,
-    );
-    let config_store = RuntimeConfigStore::new(None);
-    let new_config = RuntimeConfig::new(new_params_table)?;
-
-    let mut num_no_profile = 0;
-    let mut num_cheaper = 0;
-    let mut num_equal = 0;
-    let mut num_more_expensive = 0;
-    let mut num_ok = 0;
-    let mut num_avoidable_err = 0;
-    let mut num_unavoidable_err = 0;
-
-    let mut total_gas_cheaper = 0;
-    let mut total_gas_more_expensive = 0;
-
-    let mut affected_accounts: BTreeMap<AccountId, (u32, u32, u32)> = BTreeMap::new();
-    const MAX_RECEIPTS_PRINTED: usize = 3;
-    let mut cheaper_receipts = vec![];
-    let mut avoidable_err_receipts = vec![];
-    let mut unavoidable_err_receipts = vec![];
-
-    let newest_block_hash = chain_store.get_block_hash_by_height(end_height + 1)?;
-    let newest_block = chain_store.get_block(&newest_block_hash)?;
-    let state_roots = vec![
-        newest_block.chunks()[0].prev_state_root(),
-        newest_block.chunks()[1].prev_state_root(),
-        newest_block.chunks()[2].prev_state_root(),
-        newest_block.chunks()[3].prev_state_root(),
-    ];
-
-    let trie_config: TrieConfig = Default::default();
-
-    let trie_storage = |shard_id: u32| {
-        let shard_uid = ShardUId { version: 1, shard_id };
-        let shard_cache = TrieCache::new(&trie_config, shard_uid, false);
-        let trie_storage =
-            TrieCachingStorage::new(store.clone(), shard_cache, shard_uid, false, None);
-        Box::new(trie_storage)
-    };
-
-    let tries = (0..4)
-        .map(|shard_id| Trie::new(trie_storage(shard_id), state_roots[shard_id as usize], None))
-        .collect::<Vec<_>>();
-
-    let mut out = std::io::stdout().lock();
+    let mut stats = ParamChangeStats::default();
     for height in start_height..=end_height {
-        let block_hash = match chain_store.get_block_hash_by_height(height) {
-            Ok(hash) => hash,
-            Err(Error::DBNotFoundErr(..)) => continue,
-            Err(e) => panic!("unexpected error when looking up block hash {e}"),
-        };
-
-        let block = chain_store.get_block(&block_hash)?;
-        let block_protocol_version = block.header().latest_protocol_version();
-        let block_runtime_config = config_store.get_config(block_protocol_version);
-
-        for chunk_header in block.chunks().iter() {
-            let chunk = chain_store.get_chunk(&chunk_header.chunk_hash())?;
-            for receipt in chunk.receipts().iter() {
-                let receipt_id = receipt.receipt_id;
-                for outcome in chain_store.get_outcomes_by_id(&receipt_id)? {
-                    let gas_burnt = outcome.outcome_with_id.outcome.gas_burnt;
-                    let gas_attached: u64 =
-                        fn_calls(receipt).into_iter().flatten().map(|func| func.gas).sum();
-                    if gas_attached == 0 {
-                        // Not a fn call, skip.
-                        continue;
-                    }
-                    let gas_profile = crate::gas_profile::extract_gas_counters(
-                        &outcome.outcome_with_id.outcome,
-                        block_runtime_config,
-                    );
-                    if let Some(gas_profile) = gas_profile {
-                        let gas_pre_burned =
-                            new_config.transaction_costs.action_receipt_creation_config.exec_fee()
-                                + total_prepaid_exec_fees(
-                                    &new_config.transaction_costs,
-                                    &as_action_receipt(receipt).unwrap().actions,
-                                    &receipt.receiver_id,
-                                    block_protocol_version,
-                                )?;
-                        let gas_available = gas_attached + gas_pre_burned;
-
-                        let outoing_send_gas: Gas = outcome
-                            .outcome_with_id
-                            .outcome
-                            .receipt_ids
-                            .iter()
-                            .map(|outgoing_receipt_id| {
-                                let maybe_outgoing_receipt = chain_store
-                                    .get_receipt(outgoing_receipt_id)
-                                    .expect("DB err for outgoing receipt");
-                                if maybe_outgoing_receipt.is_none() {}
-                                let outgoing_receipt = match maybe_outgoing_receipt {
-                                    Some(receipt) if receipt.predecessor_id.is_system() => {
-                                        return 0
-                                    }
-                                    None => return 0,
-                                    Some(receipt) => receipt,
-                                };
-                                let sender_is_receiver =
-                                    outgoing_receipt.predecessor_id == outgoing_receipt.receiver_id;
-                                match &outgoing_receipt.receipt {
-                                    ReceiptEnum::Action(action_receipt) => {
-                                        let action_cost = new_config
-                                            .transaction_costs
-                                            .action_receipt_creation_config
-                                            .send_fee(sender_is_receiver)
-                                            + total_send_fees(
-                                                &new_config.transaction_costs,
-                                                sender_is_receiver,
-                                                &action_receipt.actions,
-                                                &outgoing_receipt.receiver_id,
-                                                block_protocol_version,
-                                            )
-                                            .expect("fee calculation must not fail");
-                                        let data_cost: Gas = action_receipt
-                                            .output_data_receivers
-                                            .iter()
-                                            .map(|DataReceiver { data_id, receiver_id }| {
-                                                let data = near_store::get_received_data(
-                                                    &tries[chunk_header.shard_id() as usize],
-                                                    receiver_id,
-                                                    *data_id,
-                                                )
-                                                .expect("data must be received");
-                                                let sender_is_receiver =
-                                                    receipt.receiver_id == *receiver_id;
-                                                let data_config = &new_config
-                                                    .transaction_costs
-                                                    .data_receipt_creation_config;
-                                                data_config.base_cost.exec_fee()
-                                                    + data_config
-                                                        .base_cost
-                                                        .send_fee(sender_is_receiver)
-                                                    + data
-                                                        .as_ref()
-                                                        .and_then(|data| {
-                                                            data.data
-                                                                .as_ref()
-                                                                .map(|d| d.len() as u64)
-                                                        })
-                                                        .unwrap_or(0)
-                                                        * (data_config.cost_per_byte.exec_fee()
-                                                            + data_config
-                                                                .cost_per_byte
-                                                                .send_fee(sender_is_receiver))
-                                            })
-                                            .sum();
-                                        action_cost + data_cost
-                                    }
-                                    ReceiptEnum::Data(_data_receipt) => 0,
-                                }
-                            })
-                            .sum();
-
-                        let new_gas = gas_profile.gas_required(&new_params_table)
-                            + gas_pre_burned
-                            + outoing_send_gas;
-                        match new_gas.cmp(&gas_burnt) {
-                            std::cmp::Ordering::Equal => num_equal += 1,
-                            std::cmp::Ordering::Greater => {
-                                num_more_expensive += 1;
-                                total_gas_more_expensive += new_gas - gas_burnt;
-                            }
-                            std::cmp::Ordering::Less => {
-                                if cheaper_receipts.len() < MAX_RECEIPTS_PRINTED {
-                                    cheaper_receipts.push(receipt.receipt_id);
-                                }
-                                if let Some(counters) =
-                                    affected_accounts.get_mut(&receipt.receiver_id)
-                                {
-                                    counters.2 += 1;
-                                }
-                                total_gas_cheaper += gas_burnt - new_gas;
-                                num_cheaper += 1;
-                            }
-                        }
-                        if debug {
-                            eprintln!("{receipt_id} new_gas={new_gas}, gas_available={gas_available}, gas_attached={gas_attached}, gas_pre_burned={gas_pre_burned}, gas_burnt={gas_burnt}");
-                        }
-                        if new_gas <= gas_available {
-                            num_ok += 1;
-                        } else if new_gas <= gas_limit {
-                            num_avoidable_err += 1;
-                            affected_accounts.entry(receipt.receiver_id.clone()).or_default().0 +=
-                                1;
-                            if avoidable_err_receipts.len() < MAX_RECEIPTS_PRINTED {
-                                avoidable_err_receipts.push(receipt.receipt_id);
-                            }
-                            let percent = ((new_gas as f64 / gas_burnt as f64) - 1.0) * 100.0;
-                            writeln!(
-                                out,
-                                "{receipt_id:?} OK but exceeds old gas burnt by {percent:.2}% ({gas_limit} > {new_gas} > {gas_available})"
-                            )?;
-                        } else {
-                            num_unavoidable_err += 1;
-                            affected_accounts.entry(receipt.receiver_id.clone()).or_default().1 +=
-                                1;
-                            if unavoidable_err_receipts.len() < MAX_RECEIPTS_PRINTED {
-                                unavoidable_err_receipts.push(receipt.receipt_id);
-                            }
-                            let percent = ((new_gas as f64 / gas_limit as f64) - 1.0) * 100.0;
-                            writeln!(
-                                out,
-                                "{receipt_id:?} exceeds gas limit by {percent:.2}% ({new_gas} > {gas_limit} > {gas_available})"
-                            )?;
-                        }
-                    } else {
-                        num_no_profile += 1;
-                        writeln!(out, "missing gas profile {receipt_id:?}")?;
-                    }
-                }
-            }
-        }
+        gas_param_checker.collect_gas_changes_in_block(height, &mut stats)?;
 
         if (height - start_height) % 1000 == 1 {
-            writeln!(
-                out,
-                "finished block {height}, ({num_unavoidable_err}/{num_avoidable_err}/{num_ok}) (above gas limit / above old gas burnt / ok) [{num_no_profile} missing profiles]"
-            )?;
+            println!("finished block {height}: {}", stats.single_line_summary());
         }
     }
 
-    fn as_action_receipt(receipt: &near_primitives::receipt::Receipt) -> Option<&ActionReceipt> {
-        if let ReceiptEnum::Action(action_receipt) = &receipt.receipt {
-            Some(action_receipt)
-        } else {
-            None
-        }
-    }
-    fn fn_calls(
-        receipt: &near_primitives::receipt::Receipt,
-    ) -> Option<impl Iterator<Item = &FunctionCallAction>> {
-        use near_primitives::transaction::Action;
-        Some(as_action_receipt(receipt)?.actions.iter().flat_map(|a| match a {
-            Action::FunctionCall(fn_call_action) => Some(fn_call_action),
-            _ => None,
-        }))
-    }
-
-    let avg_cheaper = total_gas_cheaper as f64 / num_cheaper as f64 / 10e12;
-    let avg_expensive = total_gas_more_expensive as f64 / num_more_expensive as f64 / 10e12;
-
-    writeln!(out)?;
-    writeln!(out, "Summary for checked range {start_height} - {end_height}")?;
-    writeln!(out)?;
-    writeln!(out, "{num_cheaper:<12} became cheaper, {avg_cheaper:.3} Tgas on average")?;
-    writeln!(out, "{num_equal:<12} same amount of gas")?;
-    writeln!(out, "{num_more_expensive:<12} more expensive, {avg_expensive:.3} Tgas on average")?;
-    writeln!(out)?;
-    writeln!(out, "{num_unavoidable_err:<12} exceeding gas limit of {gas_limit}")?;
-    writeln!(out, "{num_avoidable_err:<12} need more gas attached")?;
-    writeln!(out, "{num_ok:<12} ok")?;
-    writeln!(out)?;
-    writeln!(out, "{num_no_profile:<12} without profile")?;
-    writeln!(out)?;
-
-    if !affected_accounts.is_empty() {
-        writeln!(
-            out,
-            "{:32} {:12}/{:12}   {}",
-            "List of broken receivers", "avoidable", "unavoidable", "cheaper"
-        )?;
-    }
-    for (account, (avoidable, unavoidable, cheaper)) in affected_accounts {
-        writeln!(out, "{account:<32} {avoidable:>12}/{unavoidable:<12}   {cheaper}")?;
-    }
-
-    writeln!(out)?;
-    writeln!(out, "Unavoidable error receipts:")?;
-    for hash in unavoidable_err_receipts {
-        writeln!(out, "{hash}")?;
-    }
-    writeln!(out)?;
-    writeln!(out, "Avoidable error receipts:")?;
-    for hash in avoidable_err_receipts {
-        writeln!(out, "{hash}")?;
-    }
-    writeln!(out)?;
-    writeln!(out, "Cheaper receipts:")?;
-    for hash in cheaper_receipts {
-        writeln!(out, "{hash}")?;
-    }
+    println!();
+    println!("Summary for checked range {start_height} - {end_height}");
+    println!();
+    println!("{stats}");
 
     Ok(())
 }

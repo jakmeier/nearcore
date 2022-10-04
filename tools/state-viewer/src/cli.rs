@@ -520,8 +520,7 @@ impl NewGasParamsCmd {
             near_config,
             self.start_height,
             self.end_height,
-            // &[0, 1, 2, 3],
-            &new_params_table,
+            new_params_table,
             gas_limit,
         )
         .unwrap();
