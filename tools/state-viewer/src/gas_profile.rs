@@ -201,7 +201,6 @@ impl GasParameterChangeChecker {
         trie: &Trie,
         stats: &mut ParamChangeStats,
     ) {
-        const MAX_RECEIPTS_PRINTED: usize = 3;
         let change = self.function_call_gas_change(
             receipt,
             &outcome,
@@ -219,9 +218,7 @@ impl GasParameterChangeChecker {
             }
             Ok(Some(GasCostChange::Equal)) => stats.num_equal += 1,
             Ok(Some(GasCostChange::Cheaper { change })) => {
-                if stats.cheaper_receipts.len() < MAX_RECEIPTS_PRINTED {
-                    stats.cheaper_receipts.push(receipt.receipt_id);
-                }
+                ParamChangeStats::add_id(&mut stats.cheaper_receipts, receipt.receipt_id);
                 if let Some(counters) = stats.affected_accounts.get_mut(&receipt.receiver_id) {
                     counters.2 += 1;
                 }
@@ -238,9 +235,7 @@ impl GasParameterChangeChecker {
                 stats.total_gas_more_expensive += change;
 
                 stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default().0 += 1;
-                if stats.avoidable_err_receipts.len() < MAX_RECEIPTS_PRINTED {
-                    stats.avoidable_err_receipts.push(receipt.receipt_id);
-                }
+                ParamChangeStats::add_id(&mut stats.avoidable_err_receipts, receipt.receipt_id);
                 debug!("{} exceeds attached gas by {}", receipt.receipt_id, above_attached);
             }
             Ok(Some(GasCostChange::MoreExpensiveAboveGasLimit {
@@ -253,9 +248,7 @@ impl GasParameterChangeChecker {
                 stats.total_gas_more_expensive += change;
 
                 stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default().1 += 1;
-                if stats.unavoidable_err_receipts.len() < MAX_RECEIPTS_PRINTED {
-                    stats.unavoidable_err_receipts.push(receipt.receipt_id);
-                }
+                ParamChangeStats::add_id(&mut stats.unavoidable_err_receipts, receipt.receipt_id);
                 debug!("{} exceeds attached gas by {}", receipt.receipt_id, above_attached);
                 debug!("{} exceeds gas limit by {}", receipt.receipt_id, above_limit);
             }
@@ -446,6 +439,8 @@ pub(crate) struct ParamChangeStats {
 }
 
 impl ParamChangeStats {
+    const MAX_RECEIPTS_PRINTED: usize = 3;
+
     pub(crate) fn print_occasionally(&mut self, print_every: u64) -> Option<String> {
         if print_every == 0 {
             return None;
@@ -458,6 +453,7 @@ impl ParamChangeStats {
             None
         }
     }
+
     fn single_line_summary(&self) -> String {
         let unavoidable_err = self.num_unavoidable_err;
         let avoidable_err = self.num_avoidable_err;
@@ -471,11 +467,20 @@ impl ParamChangeStats {
             - self.num_unavoidable_err
     }
 
-    pub(crate) fn merge(mut self, other: Self) -> Self {
-        self.affected_accounts.extend(other.affected_accounts);
-        self.cheaper_receipts.extend(other.cheaper_receipts);
-        self.avoidable_err_receipts.extend(other.avoidable_err_receipts);
-        self.unavoidable_err_receipts.extend(other.unavoidable_err_receipts);
+    pub(crate) fn merge(mut self, mut other: Self) -> Self {
+        for (key, value) in other.affected_accounts {
+            match self.affected_accounts.entry(key) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(value);
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    let entry = entry.get_mut();
+                    entry.0 += value.0;
+                    entry.1 += value.1;
+                    entry.2 += value.2;
+                }
+            }
+        }
 
         ParamChangeStats {
             num_equal: self.num_equal + other.num_equal,
@@ -489,11 +494,30 @@ impl ParamChangeStats {
             num_replay_errors: self.num_replay_errors + other.num_replay_errors,
             num_missing_blocks: self.num_missing_blocks + other.num_missing_blocks,
             affected_accounts: self.affected_accounts,
-            cheaper_receipts: self.cheaper_receipts,
-            avoidable_err_receipts: self.avoidable_err_receipts,
-            unavoidable_err_receipts: self.unavoidable_err_receipts,
+            cheaper_receipts: Self::merge_ids(self.cheaper_receipts, &mut other.cheaper_receipts),
+            avoidable_err_receipts: Self::merge_ids(
+                self.avoidable_err_receipts,
+                &mut other.avoidable_err_receipts,
+            ),
+            unavoidable_err_receipts: Self::merge_ids(
+                self.unavoidable_err_receipts,
+                &mut other.unavoidable_err_receipts,
+            ),
             print_delay_counter: self.print_delay_counter + other.print_delay_counter,
         }
+    }
+
+    fn add_id(list: &mut Vec<CryptoHash>, id: CryptoHash) {
+        if list.len() < ParamChangeStats::MAX_RECEIPTS_PRINTED {
+            list.push(id);
+        }
+    }
+
+    fn merge_ids(mut left: Vec<CryptoHash>, right: &mut Vec<CryptoHash>) -> Vec<CryptoHash> {
+        while left.len() < Self::MAX_RECEIPTS_PRINTED && !right.is_empty() {
+            left.push(right.pop().unwrap());
+        }
+        left
     }
 }
 
