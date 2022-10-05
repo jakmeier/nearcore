@@ -18,6 +18,7 @@ use near_store::{ShardUId, Store, Trie, TrieCache, TrieCachingStorage, TrieConfi
 use nearcore::NearConfig;
 use node_runtime::config::{total_prepaid_exec_fees, total_send_fees, RuntimeConfig};
 use std::collections::BTreeMap;
+use std::ops::AddAssign;
 use tracing::{debug, error};
 
 pub(crate) struct GasFeeCounters {
@@ -225,22 +226,33 @@ impl GasParameterChangeChecker {
             Ok(Some(GasCostChange::Equal)) => stats.num_equal += 1,
             Ok(Some(GasCostChange::Cheaper { change })) => {
                 ParamChangeStats::add_id(&mut stats.cheaper_receipts, receipt.receipt_id);
-                if let Some(counters) = stats.affected_accounts.get_mut(&receipt.receiver_id) {
-                    counters.2 += 1;
-                }
                 stats.total_gas_cheaper += change as u128;
                 stats.num_cheaper += 1;
+                let account =
+                    stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default();
+                account.cheaper += 1;
+                account.total_discount += change as u128;
+                account.cheaper_receipt.get_or_insert(receipt.receipt_id);
             }
             Ok(Some(GasCostChange::MoreExpensiveButOk { change })) => {
                 stats.num_more_expensive += 1;
                 stats.total_gas_more_expensive += change as u128;
+                let account =
+                    stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default();
+                account.more_expensive_but_ok += 1;
+                account.total_increase += change as u128;
             }
             Ok(Some(GasCostChange::MoreExpensiveAboveAttachedGas { change, above_attached })) => {
                 stats.num_avoidable_err += 1;
                 stats.num_more_expensive += 1;
                 stats.total_gas_more_expensive += change as u128;
 
-                stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default().0 += 1;
+                let account =
+                    stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default();
+                account.avoidable += 1;
+                account.total_increase += change as u128;
+                account.avoidable_receipt.get_or_insert(receipt.receipt_id);
+
                 ParamChangeStats::add_id(&mut stats.avoidable_err_receipts, receipt.receipt_id);
                 debug!("{} exceeds attached gas by {}", receipt.receipt_id, above_attached);
             }
@@ -253,7 +265,12 @@ impl GasParameterChangeChecker {
                 stats.num_more_expensive += 1;
                 stats.total_gas_more_expensive += change as u128;
 
-                stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default().1 += 1;
+                let account =
+                    stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default();
+                account.unavoidable += 1;
+                account.total_increase += change as u128;
+                account.unavoidable_receipt.get_or_insert(receipt.receipt_id);
+
                 ParamChangeStats::add_id(&mut stats.unavoidable_err_receipts, receipt.receipt_id);
                 debug!("{} exceeds attached gas by {}", receipt.receipt_id, above_attached);
                 debug!("{} exceeds gas limit by {}", receipt.receipt_id, above_limit);
@@ -435,7 +452,7 @@ pub(crate) struct ParamChangeStats {
     pub total_gas_more_expensive: u128,
     pub num_replay_errors: u64,
     pub num_missing_blocks: u64,
-    pub affected_accounts: BTreeMap<AccountId, (u32, u32, u32)>,
+    pub affected_accounts: BTreeMap<AccountId, AffectedAccountStats>,
     // store a few samples receipts for further analysis
     pub cheaper_receipts: Vec<CryptoHash>,
     pub avoidable_err_receipts: Vec<CryptoHash>,
@@ -481,9 +498,7 @@ impl ParamChangeStats {
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     let entry = entry.get_mut();
-                    entry.0 += value.0;
-                    entry.1 += value.1;
-                    entry.2 += value.2;
+                    *entry += value;
                 }
             }
         }
@@ -558,12 +573,36 @@ impl std::fmt::Display for ParamChangeStats {
         if !self.affected_accounts.is_empty() {
             writeln!(
                 out,
-                "{:32} {:12}/{:12}   {}",
-                "List of broken receivers", "avoidable", "unavoidable", "cheaper"
+                "{:48} {:16}/{:16} ({:7})   {:6} ({:7})",
+                "List of broken receivers",
+                "exceeds_limit",
+                "exceeds_attached",
+                "+Tgas/receipt",
+                "cheaper",
+                "-Tgas/receipt"
             )?;
         }
-        for (account, (avoidable, unavoidable, cheaper)) in &self.affected_accounts {
-            writeln!(out, "{account:<32} {avoidable:>12}/{unavoidable:<12}   {cheaper}")?;
+        for (account, account_stats) in &self.affected_accounts {
+            if account_stats.avoidable + account_stats.unavoidable == 0 {
+                // don't bother printing stats for accounts that are fine
+                continue;
+            }
+            let avoidable = account_stats.avoidable;
+            let unavoidable = account_stats.unavoidable;
+            let cheaper = account_stats.cheaper;
+            let total_increase = account_stats.total_increase;
+            let total_discount = account_stats.total_discount;
+            let increase_per_receipt = (total_increase
+                / (avoidable + unavoidable + account_stats.more_expensive_but_ok) as u128)
+                as f64
+                / 1e12;
+            let discount_per_receipt = (total_discount / cheaper as u128) as f64 / 1e12;
+
+            write!(out, "{account:<48} {unavoidable:>16}/{avoidable:<16} ({increase_per_receipt:7.3})   {cheaper:>6} ({discount_per_receipt:7.3})    ")?;
+            maybe_print_id(out, account_stats.unavoidable_receipt)?;
+            maybe_print_id(out, account_stats.avoidable_receipt)?;
+            maybe_print_id(out, account_stats.cheaper_receipt)?;
+            writeln!(out)?;
         }
 
         writeln!(out)?;
@@ -587,6 +626,40 @@ impl std::fmt::Display for ParamChangeStats {
         writeln!(out, "{num_replay_errors:3} replay errors")?;
 
         Ok(())
+    }
+}
+
+fn maybe_print_id(out: &mut std::fmt::Formatter<'_>, id: Option<CryptoHash>) -> std::fmt::Result {
+    match id {
+        Some(id) => write!(out, "{id} "),
+        None => write!(out, "-------------------------------------------- "),
+    }
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct AffectedAccountStats {
+    more_expensive_but_ok: u64,
+    avoidable: u64,
+    unavoidable: u64,
+    cheaper: u64,
+    avoidable_receipt: Option<CryptoHash>,
+    unavoidable_receipt: Option<CryptoHash>,
+    cheaper_receipt: Option<CryptoHash>,
+    total_increase: u128,
+    total_discount: u128,
+}
+
+impl AddAssign for AffectedAccountStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.more_expensive_but_ok += rhs.more_expensive_but_ok;
+        self.avoidable += rhs.avoidable;
+        self.unavoidable += rhs.unavoidable;
+        self.cheaper += rhs.cheaper;
+        self.avoidable_receipt = self.avoidable_receipt.or(rhs.avoidable_receipt);
+        self.unavoidable_receipt = self.avoidable_receipt.or(rhs.unavoidable_receipt);
+        self.cheaper_receipt = self.avoidable_receipt.or(rhs.cheaper_receipt);
+        self.total_increase += rhs.total_increase;
+        self.total_discount += rhs.total_discount;
     }
 }
 
