@@ -546,10 +546,10 @@ impl std::fmt::Display for ParamChangeStats {
         if !self.affected_accounts.is_empty() {
             writeln!(
                 out,
-                "{:48} {:16}/{:16} ({:7})   {:6} ({:7})",
+                "{:40} {:4}/{:4} ({:7})   {:6} ({:7})",
                 "List of broken receivers",
-                "exceeds_limit",
-                "exceeds_attached",
+                ">limit",
+                ">attached",
                 "+Tgas/receipt",
                 "cheaper",
                 "-Tgas/receipt"
@@ -579,7 +579,7 @@ impl std::fmt::Display for ParamChangeStats {
                 (total_discount / cheaper as u128) as f64 / 1e12
             };
 
-            write!(out, "{account:<48} {unavoidable:>16}/{avoidable:<16} ({increase_per_receipt:7.3})   {cheaper:>6} ({discount_per_receipt:7.3})    ")?;
+            write!(out, "{account:<40} {unavoidable:>4}/{avoidable:<4} ({increase_per_receipt:7.3})   {cheaper:>6} ({discount_per_receipt:7.3})    ")?;
             maybe_print_id(out, account_stats.unavoidable_receipt)?;
             maybe_print_id(out, account_stats.avoidable_receipt)?;
             maybe_print_id(out, account_stats.cheaper_receipt)?;
@@ -617,8 +617,8 @@ impl AddAssign for AffectedAccountStats {
         self.unavoidable += rhs.unavoidable;
         self.cheaper += rhs.cheaper;
         self.avoidable_receipt = self.avoidable_receipt.or(rhs.avoidable_receipt);
-        self.unavoidable_receipt = self.avoidable_receipt.or(rhs.unavoidable_receipt);
-        self.cheaper_receipt = self.avoidable_receipt.or(rhs.cheaper_receipt);
+        self.unavoidable_receipt = self.unavoidable_receipt.or(rhs.unavoidable_receipt);
+        self.cheaper_receipt = self.cheaper_receipt.or(rhs.cheaper_receipt);
         self.total_increase += rhs.total_increase;
         self.total_discount += rhs.total_discount;
     }
