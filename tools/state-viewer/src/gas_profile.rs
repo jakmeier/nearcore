@@ -222,17 +222,17 @@ impl GasParameterChangeChecker {
                 if let Some(counters) = stats.affected_accounts.get_mut(&receipt.receiver_id) {
                     counters.2 += 1;
                 }
-                stats.total_gas_cheaper += change;
+                stats.total_gas_cheaper += change as u128;
                 stats.num_cheaper += 1;
             }
             Ok(Some(GasCostChange::MoreExpensiveButOk { change })) => {
                 stats.num_more_expensive += 1;
-                stats.total_gas_more_expensive += change;
+                stats.total_gas_more_expensive += change as u128;
             }
             Ok(Some(GasCostChange::MoreExpensiveAboveAttachedGas { change, above_attached })) => {
                 stats.num_avoidable_err += 1;
                 stats.num_more_expensive += 1;
-                stats.total_gas_more_expensive += change;
+                stats.total_gas_more_expensive += change as u128;
 
                 stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default().0 += 1;
                 ParamChangeStats::add_id(&mut stats.avoidable_err_receipts, receipt.receipt_id);
@@ -245,7 +245,7 @@ impl GasParameterChangeChecker {
             })) => {
                 stats.num_unavoidable_err += 1;
                 stats.num_more_expensive += 1;
-                stats.total_gas_more_expensive += change;
+                stats.total_gas_more_expensive += change as u128;
 
                 stats.affected_accounts.entry(receipt.receiver_id.clone()).or_default().1 += 1;
                 ParamChangeStats::add_id(&mut stats.unavoidable_err_receipts, receipt.receipt_id);
@@ -425,8 +425,8 @@ pub(crate) struct ParamChangeStats {
     pub num_unavoidable_err: u64,
     pub num_cheaper: u64,
     pub num_more_expensive: u64,
-    pub total_gas_cheaper: u64,
-    pub total_gas_more_expensive: u64,
+    pub total_gas_cheaper: u128,
+    pub total_gas_more_expensive: u128,
     pub num_replay_errors: u64,
     pub num_missing_blocks: u64,
     pub affected_accounts: BTreeMap<AccountId, (u32, u32, u32)>,
