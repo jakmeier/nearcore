@@ -565,11 +565,19 @@ impl std::fmt::Display for ParamChangeStats {
             let cheaper = account_stats.cheaper;
             let total_increase = account_stats.total_increase;
             let total_discount = account_stats.total_discount;
-            let increase_per_receipt = (total_increase
-                / (avoidable + unavoidable + account_stats.more_expensive_but_ok) as u128)
-                as f64
-                / 1e12;
-            let discount_per_receipt = (total_discount / cheaper as u128) as f64 / 1e12;
+            let increase_per_receipt = if total_increase == 0 {
+                0.0
+            } else {
+                (total_increase
+                    / (avoidable + unavoidable + account_stats.more_expensive_but_ok) as u128)
+                    as f64
+                    / 1e12
+            };
+            let discount_per_receipt = if total_discount == 0 {
+                0.0
+            } else {
+                (total_discount / cheaper as u128) as f64 / 1e12
+            };
 
             write!(out, "{account:<48} {unavoidable:>16}/{avoidable:<16} ({increase_per_receipt:7.3})   {cheaper:>6} ({discount_per_receipt:7.3})    ")?;
             maybe_print_id(out, account_stats.unavoidable_receipt)?;
