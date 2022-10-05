@@ -9,7 +9,7 @@ use near_primitives::receipt::{ActionReceipt, DataReceiver, Receipt, ReceiptEnum
 use near_primitives::runtime::config_store::RuntimeConfigStore;
 use near_primitives::runtime::parameter_table::ParameterTable;
 use near_primitives::transaction::{
-    Action, ExecutionOutcome, ExecutionOutcomeWithIdAndProof, FunctionCallAction,
+    Action, ExecutionOutcome, ExecutionOutcomeWithIdAndProof, ExecutionStatus, FunctionCallAction,
 };
 use near_primitives::types::{AccountId, BlockHeight, Gas};
 use near_primitives::version::ProtocolVersion;
@@ -177,14 +177,20 @@ impl GasParameterChangeChecker {
             for receipt in chunk.receipts().iter() {
                 let receipt_id = receipt.receipt_id;
                 for outcome in self.chain_store.get_outcomes_by_id(&receipt_id)? {
-                    let trie = &self.tries[chunk_header.shard_id() as usize];
+                    // only evaluate successful receipts
+                    match outcome.outcome_with_id.outcome.status {
+                        ExecutionStatus::Unknown | ExecutionStatus::Failure(_) => continue,
+                        ExecutionStatus::SuccessValue(_) | ExecutionStatus::SuccessReceiptId(_) => {
+                            ()
+                        }
+                    }
 
                     self.check_outcome_change(
                         receipt,
                         &outcome,
                         block_runtime_config,
                         block_protocol_version,
-                        trie,
+                        &self.tries[chunk_header.shard_id() as usize],
                         stats,
                     );
                 }
