@@ -225,7 +225,6 @@ impl GasParameterChangeChecker {
             }
             Ok(Some(GasCostChange::Equal)) => stats.num_equal += 1,
             Ok(Some(GasCostChange::Cheaper { change })) => {
-                ParamChangeStats::add_id(&mut stats.cheaper_receipts, receipt.receipt_id);
                 stats.total_gas_cheaper += change as u128;
                 stats.num_cheaper += 1;
                 let account =
@@ -253,7 +252,6 @@ impl GasParameterChangeChecker {
                 account.total_increase += change as u128;
                 account.avoidable_receipt.get_or_insert(receipt.receipt_id);
 
-                ParamChangeStats::add_id(&mut stats.avoidable_err_receipts, receipt.receipt_id);
                 debug!("{} exceeds attached gas by {}", receipt.receipt_id, above_attached);
             }
             Ok(Some(GasCostChange::MoreExpensiveAboveGasLimit {
@@ -271,7 +269,6 @@ impl GasParameterChangeChecker {
                 account.total_increase += change as u128;
                 account.unavoidable_receipt.get_or_insert(receipt.receipt_id);
 
-                ParamChangeStats::add_id(&mut stats.unavoidable_err_receipts, receipt.receipt_id);
                 debug!("{} exceeds attached gas by {}", receipt.receipt_id, above_attached);
                 debug!("{} exceeds gas limit by {}", receipt.receipt_id, above_limit);
             }
@@ -453,17 +450,11 @@ pub(crate) struct ParamChangeStats {
     pub num_replay_errors: u64,
     pub num_missing_blocks: u64,
     pub affected_accounts: BTreeMap<AccountId, AffectedAccountStats>,
-    // store a few samples receipts for further analysis
-    pub cheaper_receipts: Vec<CryptoHash>,
-    pub avoidable_err_receipts: Vec<CryptoHash>,
-    pub unavoidable_err_receipts: Vec<CryptoHash>,
     /// used for printing intermediate results
     pub print_delay_counter: u64,
 }
 
 impl ParamChangeStats {
-    const MAX_RECEIPTS_PRINTED: usize = 3;
-
     pub(crate) fn print_occasionally(&mut self, print_every: u64) -> Option<String> {
         if print_every == 0 {
             return None;
@@ -481,7 +472,7 @@ impl ParamChangeStats {
         let unavoidable_err = self.num_unavoidable_err;
         let avoidable_err = self.num_avoidable_err;
         let ok = self.ok();
-        format!("({unavoidable_err}/{avoidable_err}/{ok}) (above_gas_limit/above old_gas_burnt/ok)")
+        format!("({unavoidable_err}/{avoidable_err}/{ok}) (above_gas_limit/above_old_gas_burnt/ok)")
     }
 
     fn ok(&self) -> u64 {
@@ -490,7 +481,7 @@ impl ParamChangeStats {
             - self.num_unavoidable_err
     }
 
-    pub(crate) fn merge(mut self, mut other: Self) -> Self {
+    pub(crate) fn merge(mut self, other: Self) -> Self {
         for (key, value) in other.affected_accounts {
             match self.affected_accounts.entry(key) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
@@ -515,30 +506,8 @@ impl ParamChangeStats {
             num_replay_errors: self.num_replay_errors + other.num_replay_errors,
             num_missing_blocks: self.num_missing_blocks + other.num_missing_blocks,
             affected_accounts: self.affected_accounts,
-            cheaper_receipts: Self::merge_ids(self.cheaper_receipts, &mut other.cheaper_receipts),
-            avoidable_err_receipts: Self::merge_ids(
-                self.avoidable_err_receipts,
-                &mut other.avoidable_err_receipts,
-            ),
-            unavoidable_err_receipts: Self::merge_ids(
-                self.unavoidable_err_receipts,
-                &mut other.unavoidable_err_receipts,
-            ),
             print_delay_counter: self.print_delay_counter + other.print_delay_counter,
         }
-    }
-
-    fn add_id(list: &mut Vec<CryptoHash>, id: CryptoHash) {
-        if list.len() < ParamChangeStats::MAX_RECEIPTS_PRINTED {
-            list.push(id);
-        }
-    }
-
-    fn merge_ids(mut left: Vec<CryptoHash>, right: &mut Vec<CryptoHash>) -> Vec<CryptoHash> {
-        while left.len() < Self::MAX_RECEIPTS_PRINTED && !right.is_empty() {
-            left.push(right.pop().unwrap());
-        }
-        left
     }
 }
 
@@ -568,6 +537,10 @@ impl std::fmt::Display for ParamChangeStats {
         writeln!(out, "{num_unavoidable_err:<12} exceeding gas limit")?;
         writeln!(out, "{num_avoidable_err:<12} need more gas attached")?;
         writeln!(out, "{num_ok:<12} ok")?;
+        writeln!(out)?;
+
+        writeln!(out, "{num_missing_blocks:3} missing blocks")?;
+        writeln!(out, "{num_replay_errors:3} replay errors")?;
         writeln!(out)?;
 
         if !self.affected_accounts.is_empty() {
@@ -604,26 +577,6 @@ impl std::fmt::Display for ParamChangeStats {
             maybe_print_id(out, account_stats.cheaper_receipt)?;
             writeln!(out)?;
         }
-
-        writeln!(out)?;
-        writeln!(out, "Unavoidable error receipts:")?;
-        for hash in &self.unavoidable_err_receipts {
-            writeln!(out, "{hash}")?;
-        }
-        writeln!(out)?;
-        writeln!(out, "Avoidable error receipts:")?;
-        for hash in &self.avoidable_err_receipts {
-            writeln!(out, "{hash}")?;
-        }
-        writeln!(out)?;
-        writeln!(out, "Cheaper receipts:")?;
-        for hash in &self.cheaper_receipts {
-            writeln!(out, "{hash}")?;
-        }
-
-        writeln!(out)?;
-        writeln!(out, "{num_missing_blocks:3} missing blocks")?;
-        writeln!(out, "{num_replay_errors:3} replay errors")?;
 
         Ok(())
     }
