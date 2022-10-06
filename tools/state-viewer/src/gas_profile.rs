@@ -546,32 +546,45 @@ impl std::fmt::Display for ParamChangeStats {
         if !self.affected_accounts.is_empty() {
             writeln!(
                 out,
-                "{:40} {:4}/{:4} ({:7})   {:6} ({:7})",
+                "{:40} {:4}/{:4}/{:4} {:7} {:6} {:7} {:7}",
                 "List of broken receivers",
                 ">limit",
                 ">attached",
+                ">old_gas",
                 "+Tgas/receipt",
                 "cheaper",
-                "-Tgas/receipt"
+                "-Tgas/receipt",
+                "avg Tgas/receipt"
             )?;
         }
         for (account, account_stats) in &self.affected_accounts {
             if account_stats.avoidable + account_stats.unavoidable == 0 {
-                // don't bother printing stats for accounts that are fine
-                continue;
+                // for now I want to know about almost all accounts... it's gonna be a lot of output though
+                if account_stats.avoidable
+                    + account_stats.unavoidable
+                    + account_stats.cheaper
+                    + account_stats.more_expensive_but_ok
+                    < 10
+                {
+                    // don't bother printing stats for accounts that are fine
+                    continue;
+                }
             }
             let avoidable = account_stats.avoidable;
             let unavoidable = account_stats.unavoidable;
+            let more_expensive_but_ok = account_stats.more_expensive_but_ok;
             let cheaper = account_stats.cheaper;
             let total_increase = account_stats.total_increase;
             let total_discount = account_stats.total_discount;
+            let num_more_expensive = avoidable + unavoidable + more_expensive_but_ok;
+            let account_average_change = ((total_increase as i128 - total_discount as i128)
+                / (num_more_expensive + cheaper) as i128)
+                as f64
+                / 1e12;
             let increase_per_receipt = if total_increase == 0 {
                 0.0
             } else {
-                (total_increase
-                    / (avoidable + unavoidable + account_stats.more_expensive_but_ok) as u128)
-                    as f64
-                    / 1e12
+                (total_increase / num_more_expensive as u128) as f64 / 1e12
             };
             let discount_per_receipt = if total_discount == 0 {
                 0.0
@@ -579,7 +592,7 @@ impl std::fmt::Display for ParamChangeStats {
                 (total_discount / cheaper as u128) as f64 / 1e12
             };
 
-            write!(out, "{account:<40} {unavoidable:>4}/{avoidable:<4} ({increase_per_receipt:7.3})   {cheaper:>6} ({discount_per_receipt:7.3})    ")?;
+            write!(out, "{account:<40} {unavoidable:>4}/{avoidable:<4}/{more_expensive_but_ok:<4} +{increase_per_receipt:7.3} {cheaper:>6} -{discount_per_receipt:7.3} {account_average_change:7.3}   ")?;
             maybe_print_id(out, account_stats.unavoidable_receipt)?;
             maybe_print_id(out, account_stats.avoidable_receipt)?;
             maybe_print_id(out, account_stats.cheaper_receipt)?;
