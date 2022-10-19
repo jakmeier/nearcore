@@ -4,7 +4,7 @@ use crate::trie::nibble_slice::NibbleSlice;
 use crate::trie::{TrieNode, TrieNodeWithSize, ValueHandle};
 use crate::{StorageError, Trie};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Crumb {
     node: TrieNodeWithSize,
     status: CrumbStatus,
@@ -364,8 +364,8 @@ impl<'a> HeavySubTrieIterator<'a> {
     // TODO: Instead return `SendTrieIterator` that contains only Send fields and has an into_iter() -> TrieIterator method.
     fn spawn_sub_trie_iter(&mut self) -> TrieIterator<'a> {
         let key_nibbles = self.trie_iterator.key_nibbles.clone();
-        let node = self.trie_iterator.trail.pop().unwrap();
-        return TrieIterator { trie: self.trie_iterator.trie, trail: vec![node], key_nibbles };
+        let crumb = self.trie_iterator.trail.last().unwrap().clone();
+        return TrieIterator { trie: self.trie_iterator.trie, trail: vec![crumb], key_nibbles };
     }
 }
 
@@ -386,7 +386,11 @@ impl<'a> Iterator for HeavySubTrieIterator<'a> {
                         if self.trie_iterator.trail.last().unwrap().node.memory_usage
                             < self.target_size_bytes
                         {
-                            return Some(Ok(self.spawn_sub_trie_iter()));
+                            let sub_trie = self.spawn_sub_trie_iter();
+                            // for the current iterator, stop processing the just entered node
+                            // key nibbles have not been updated when entering a node, so only trail needs to be popped
+                            self.trie_iterator.trail.pop();
+                            return Some(Ok(sub_trie));
                         }
                     }
                     Err(err) => return Some(Err(err)),
@@ -396,10 +400,32 @@ impl<'a> Iterator for HeavySubTrieIterator<'a> {
                     match &self.trie_iterator.trail.last().unwrap().node.node {
                         TrieNode::Leaf(_, _) => {
                             // Leaf alone is heavy enough to be its own subtrie.
-                            return Some(Ok(self.spawn_sub_trie_iter()));
+                            let mut sub_trie = self.spawn_sub_trie_iter();
+                            // exit current leaf in this iterator
+                            self.trie_iterator.trail.last_mut().unwrap().status =
+                                CrumbStatus::Exiting;
+                            // for spawned iterator, enter leaf again so that it that it is not skipped
+                            sub_trie.trail.last_mut().unwrap().status = CrumbStatus::Entering;
+                            return Some(Ok(sub_trie));
                         }
-                        // values in other places are ignored
-                        TrieNode::Empty | TrieNode::Branch(_, _) | TrieNode::Extension(_, _) => (),
+                        // values in other places are ignored but iterator must be updated
+                        TrieNode::Branch(_, _) => {
+                            match self.trie_iterator.trail.last().unwrap().status {
+                                CrumbStatus::AtChild(15) => {
+                                    self.trie_iterator.trail.last_mut().unwrap().status =
+                                        CrumbStatus::Exiting
+                                }
+                                CrumbStatus::AtChild(i) => {
+                                    *self.trie_iterator.key_nibbles.last_mut().unwrap() =
+                                        i as u8 + 1;
+                                    self.trie_iterator.trail.last_mut().unwrap().status =
+                                        CrumbStatus::AtChild(i + 1);
+                                }
+                                CrumbStatus::At => (),
+                                CrumbStatus::Entering | CrumbStatus::Exiting => unreachable!(),
+                            }
+                        }
+                        TrieNode::Empty | TrieNode::Extension(_, _) => (),
                     }
                 }
             }
@@ -596,12 +622,143 @@ mod tests {
 
         let expected_keys = &input_keys[..8];
         assert_eq!(output_keys, expected_keys);
+    }
 
-        // nibbles to bytes
-        fn n2b(nibble_a: u8, nibble_b: u8) -> u8 {
-            assert!(nibble_a < 16);
-            assert!(nibble_b < 16);
-            (nibble_a << 4) + nibble_b
+    #[test]
+    fn test_heavy_sub_trie_iterator_iterate_all() {
+        let value_size = 1000;
+        let sub_trie_size = 2500;
+        let num_expected_sub_tries = 8;
+        // 16 keys with equal values,
+        //   L0: one branch with 2 children at level 0, weight 8x per child
+        //   L1: one extension for each child in L0
+        //   L2: one branch for each extension in L1, each with 4 children, 2x weight per child
+        //   L3: one branches for each child in L2, each with 2 children, 1x weight per child
+        //   L4: one leaf for each child in L3
+        let input_keys: Vec<_> = (0..16).map(|i| vec![n2b(i / 8, 0), n2b(i / 2, i)]).collect();
+        check_heavy_subtrie_iterate_all(
+            input_keys,
+            value_size,
+            sub_trie_size,
+            num_expected_sub_tries,
+        );
+    }
+
+    #[test]
+    fn test_heavy_sub_trie_iterator_iterate_with_extensions() {
+        let value_size = 1000;
+        let sub_trie_size = 2500;
+        let num_expected_sub_tries = 8;
+        let input_keys: Vec<_> = (0..16)
+            .map(|i| {
+                vec![
+                    n2b(1, 2),
+                    n2b(3, 4),
+                    n2b(5, 6),
+                    n2b(7, 8),
+                    n2b(9, 0),
+                    n2b(i / 8, 0),
+                    n2b(5, 5),
+                    n2b(i / 2, i),
+                    n2b(i / 2, i),
+                    n2b(i / 2, i),
+                ]
+            })
+            .collect();
+        check_heavy_subtrie_iterate_all(
+            input_keys,
+            value_size,
+            sub_trie_size,
+            num_expected_sub_tries,
+        );
+    }
+
+    #[test]
+    fn test_heavy_sub_trie_iterator_iterate_with_heavy_leaves() {
+        let value_size = 1000;
+        let sub_trie_size = 500;
+        let num_expected_sub_tries = 16;
+
+        let input_keys: Vec<_> =
+            (0..16).map(|i| vec![n2b(7, 7), n2b(i / 8, 0), n2b(5, 5), n2b(i / 2, i)]).collect();
+        check_heavy_subtrie_iterate_all(
+            input_keys,
+            value_size,
+            sub_trie_size,
+            num_expected_sub_tries,
+        );
+    }
+
+    #[track_caller]
+    fn check_heavy_subtrie_iterate_all(
+        input_keys: Vec<Vec<u8>>,
+        value_size: usize,
+        sub_trie_size: u64,
+        num_expected_sub_tries: usize,
+    ) {
+        let tries = create_tries();
+        let value: Vec<u8> = iter::repeat('x' as u8).take(value_size).collect();
+        let trie_changes: Vec<_> =
+            input_keys.iter().map(|key| (key.clone(), Some(value.clone()))).collect();
+        let state_root = test_populate_trie(
+            &tries,
+            &Trie::EMPTY_ROOT,
+            ShardUId::single_shard(),
+            trie_changes.clone(),
+        );
+        let trie = tries.get_trie_for_shard(ShardUId::single_shard(), state_root);
+        // Start a global iterator.
+        let iterator = trie.iter().unwrap();
+        // Find heavy subtries from current position.
+        let sub_tries_iterator = iterator
+            .heavy_sub_tries(sub_trie_size)
+            .expect("heavy sub tries iterator creation failed");
+        let sub_tries =
+            sub_tries_iterator.map(|st| st.expect("sub trie iteration failed")).collect::<Vec<_>>();
+        assert_eq!(sub_tries.len(), num_expected_sub_tries);
+        for sub_trie in &sub_tries {
+            let key_nibbles = &sub_trie.key_nibbles;
+            let key_nibbles_make_sense = input_keys
+                .iter()
+                .map(|bytes| bytes.iter().flat_map(|b| [b / 16, b % 16]))
+                .map(|bytes_iter| bytes_iter.collect::<Vec<_>>())
+                .any(|key| key.starts_with(key_nibbles));
+            assert!(key_nibbles_make_sense, "got key nibble: {key_nibbles:?}");
         }
+        let output_keys: Vec<_> = sub_tries
+            .into_iter()
+            .flatten()
+            .map(|kv| {
+                let (key, _value) = kv.expect("iterator failed");
+                key
+            })
+            .collect();
+        let expected_keys = &input_keys[..];
+
+        if output_keys != expected_keys {
+            // give a hint towards what went wrong
+            for key in &output_keys {
+                if !expected_keys.contains(key) {
+                    println!("sub tries returned invalid key: {key:?}");
+                }
+            }
+            for key in expected_keys {
+                if !output_keys.contains(key) {
+                    println!("expected key was missing: {key:?}");
+                }
+            }
+            // also print both values in normal assertion format
+            assert_eq!(
+                output_keys, expected_keys,
+                "iterator does not return all or not the correct values!"
+            );
+        }
+    }
+
+    // nibbles to bytes
+    fn n2b(nibble_a: u8, nibble_b: u8) -> u8 {
+        assert!(nibble_a < 16);
+        assert!(nibble_b < 16);
+        (nibble_a << 4) + nibble_b
     }
 }
