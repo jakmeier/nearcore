@@ -8,10 +8,12 @@ use tracing::log::error;
 
 use self::fold_db_ops::FoldDbOps;
 use self::gas_charges::ChargedVsFree;
+use self::replay_rocksdb::StoreReplayVisitor;
 
 mod cache_stats;
 mod fold_db_ops;
 mod gas_charges;
+mod replay_rocksdb;
 
 #[derive(clap::Parser)]
 pub(crate) struct ReplayCmd {
@@ -23,7 +25,7 @@ pub(crate) struct ReplayCmd {
     account: Option<String>,
 }
 
-#[derive(Clone, Copy, clap::Subcommand, Debug)]
+#[derive(Clone, clap::Subcommand, Debug)]
 pub(crate) enum ReplayMode {
     /// Print DB accesses and cache statistics for the entire trace.
     CacheStats,
@@ -37,17 +39,54 @@ pub(crate) enum ReplayMode {
     ChunkCacheStats,
     /// Go over DB operations and print how much of it is paid for with gas.
     GasCharges,
+    /// Replay all DB operations in the trace in sequential order on a RocksDB
+    /// instance and measure the wall-clock-time.
+    ///
+    /// For now, this only replays GETs. Those are the most important for
+    /// sequential performance, whereas writes are a) less of a concern right
+    /// now b) trickier to account for because they happen in the background
+    /// anyway.
+    RocksDb {
+        /// The RocksDB to read from. It will be copied on the filesystem level
+        /// first and the original DB will not be altered.
+        #[clap(long)]
+        db: Option<PathBuf>,
+        /// Insert all values in the trace in a first pass to ensure they
+        /// exist in the actual run.
+        #[clap(long)]
+        insert_data: bool,
+    },
 }
 
 impl ReplayCmd {
     pub(crate) fn run(&self, out: &mut dyn Write) -> anyhow::Result<()> {
-        let file = File::open(&self.trace)?;
-        self.run_on_input(io::BufReader::new(file), out)
+        self.run_on_input(
+            &|| {
+                let file = File::open(&self.trace).expect("failed to open trace");
+                io::BufReader::new(file)
+            },
+            out,
+        )
     }
 
-    fn run_on_input(&self, input: impl io::BufRead, out: &mut dyn Write) -> anyhow::Result<()> {
+    fn run_on_input<R: io::BufRead>(
+        &self,
+        input: &dyn Fn() -> R,
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
         let mut visitor = self.build_visitor();
-        for line in input.lines() {
+
+        if let Some(mut prep) = visitor.preparation_visitor() {
+            for line in input().lines() {
+                let line = line?;
+                if let Err(e) = prep.eval_line(out, &line) {
+                    error!("PREPARATION ERROR: {e} for input line: {line}");
+                }
+            }
+            prep.flush(out)?;
+        }
+
+        for line in input().lines() {
             let line = line?;
             if let Err(e) = visitor.eval_line(out, &line) {
                 error!("ERROR: {e} for input line: {line}");
@@ -85,6 +124,9 @@ impl ReplayCmd {
                     unimplemented!("account filter does not work with gas charges");
                 }
                 Box::new(ChargedVsFree::default())
+            }
+            ReplayMode::RocksDb { db, insert_data } => {
+                Box::new(StoreReplayVisitor::rocks_db(db, *insert_data))
             }
         }
     }
@@ -204,6 +246,12 @@ trait Visitor {
     fn flush(&mut self, out: &mut dyn Write) -> anyhow::Result<()> {
         let _ = out;
         Ok(())
+    }
+
+    /// Return a visitor that needs to run through the trace in a first pass
+    /// before the real pass begins.
+    fn preparation_visitor(&self) -> Option<Box<dyn Visitor + '_>> {
+        None
     }
 }
 
@@ -338,7 +386,7 @@ GET State "stateKey10" size=500
         let trace = PathBuf::new();
         let cmd = ReplayCmd { trace, mode, account };
         let mut buffer = Vec::new();
-        cmd.run_on_input(SYNTHETIC_TRACE.as_bytes(), &mut buffer).expect("failed replaying");
+        cmd.run_on_input(&|| SYNTHETIC_TRACE.as_bytes(), &mut buffer).expect("failed replaying");
         let output =
             String::from_utf8(buffer).unwrap_or_else(|e| panic!("invalid output, failure was {e}"));
         insta::assert_snapshot!(format!("account_filter_{mode:?}"), output);
