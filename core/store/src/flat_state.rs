@@ -118,6 +118,11 @@ mod imp {
                 };
             }
 
+            // before going to the DB, check if we have the value cached
+            if let Some(cached) = self.flat_storage_state.cached_value_ref(key) {
+                timer.observe_duration();
+                return Ok(cached);
+            }
             let result = store_helper::get_ref(&self.store, key)?;
             timer.observe_duration();
             Ok(result)
@@ -315,6 +320,7 @@ mod imp {
 }
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use lru::LruCache;
 
 use crate::{CryptoHash, Store, StoreUpdate};
 pub use imp::{FlatState, FlatStateFactory};
@@ -445,6 +451,15 @@ struct FlatStorageStateInner {
     /// All these deltas here are stored on disk too.
     #[allow(unused)]
     deltas: HashMap<CryptoHash, Arc<FlatStateDelta>>,
+    /// A cache for the mapping from trie storage keys to value refs for flat_head.
+    ///
+    /// Value hashes are needed to perform a RocksDB state column lookup. That
+    /// lookup can hit in the trie node caches, which are separate from the flat
+    /// state value hash cache.
+    /// A cached mapping must be equivalent to the mapping stored on disk for flat head.
+    /// For other heads, deltas have to be applied as usual.
+    #[allow(unused)]
+    value_ref_cache: LruCache<Vec<u8>, Option<ValueRef>>,
 }
 
 #[cfg(feature = "protocol_feature_flat_state")]
@@ -632,12 +647,18 @@ impl FlatStorageState {
             }
         }
 
+        // Values are small compared to keys, keys can be up to 2kB.
+        // 100k * 2kB = 200MB per shard is somewhat acceptable and should be good to test if the cache can help at all.
+        let testing_cache_slots_limit = 100_000;
+        let value_ref_cache = LruCache::new(testing_cache_slots_limit);
+
         Self(Arc::new(RwLock::new(FlatStorageStateInner {
             store,
             shard_id,
             flat_head,
             blocks,
             deltas,
+            value_ref_cache,
         })))
     }
 
@@ -661,6 +682,12 @@ impl FlatStorageState {
         Ok(vec![])
     }
 
+    #[cfg(feature = "protocol_feature_flat_state")]
+    fn cached_value_ref(&self, key: &[u8]) -> Option<Option<ValueRef>> {
+        let mut guard = self.0.write().expect(POISONED_LOCK_ERR);
+        guard.value_ref_cache.get(key).cloned()
+    }
+
     /// Update the head of the flat storage, including updating the flat state in memory and on disk
     /// and updating the flat state to reflect the state at the new head. If updating to given head is not possible,
     /// returns an error.
@@ -678,6 +705,9 @@ impl FlatStorageState {
         guard.flat_head = *new_head;
         let mut store_update = StoreUpdate::new(guard.store.storage.clone());
         store_helper::set_flat_head(&mut store_update, guard.shard_id, new_head);
+        for (key, value) in merged_delta.0.iter() {
+            guard.value_ref_cache.put(key.clone(), value.clone());
+        }
         merged_delta.apply_to_flat_state(&mut store_update);
 
         // Remove old deltas and blocks info from memory and disk.
