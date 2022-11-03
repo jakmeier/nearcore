@@ -104,6 +104,7 @@ mod imp {
         // TODO (#7327): support different roots (or block hashes).
         // TODO (#7327): consider inlining small values, so we could use only one db access.
         pub fn get_ref(&self, key: &[u8]) -> Result<Option<ValueRef>, crate::StorageError> {
+            let timer = crate::metrics::TRIE_GET_REF_LATENCY_HIST_FLAT_STATE.start_timer();
             // Take deltas ordered from `self.block_hash` to flat state head.
             // In other words, order of deltas is the opposite of the order of blocks in chain.
             let deltas = self.flat_storage_state.get_deltas_between_blocks(&self.block_hash)?;
@@ -117,7 +118,9 @@ mod imp {
                 };
             }
 
-            Ok(store_helper::get_ref(&self.store, key)?)
+            let result = store_helper::get_ref(&self.store, key)?;
+            timer.observe_duration();
+            Ok(result)
         }
     }
 

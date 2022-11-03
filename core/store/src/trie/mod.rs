@@ -912,7 +912,10 @@ impl Trie {
         mode: KeyLookupMode,
     ) -> Result<Option<ValueRef>, StorageError> {
         let key_nibbles = NibbleSlice::new(key.clone());
+
+        let timer = crate::metrics::TRIE_GET_REF_LATENCY_HIST_LEGACY.start_timer();
         let result = self.lookup(key_nibbles);
+        timer.observe_duration();
 
         // For now, to test correctness, flat storage does double the work and
         // compares the results. This needs to be changed when the features is

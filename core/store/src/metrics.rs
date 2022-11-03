@@ -1,6 +1,6 @@
 use near_o11y::metrics::{
-    try_create_histogram_vec, try_create_int_counter_vec, try_create_int_gauge_vec, HistogramVec,
-    IntCounterVec, IntGaugeVec,
+    try_create_histogram_vec, try_create_int_counter_vec, try_create_int_gauge_vec, Histogram,
+    HistogramVec, IntCounterVec, IntGaugeVec,
 };
 use once_cell::sync::Lazy;
 
@@ -13,6 +13,23 @@ pub(crate) static DATABASE_OP_LATENCY_HIST: Lazy<HistogramVec> = Lazy::new(|| {
     )
     .unwrap()
 });
+
+pub(crate) static TRIE_GET_REF_LATENCY_HIST: Lazy<HistogramVec> = Lazy::new(|| {
+    try_create_histogram_vec(
+        "near_trie_get_ref_latency_by_impl",
+        "Trie get_ref latency by implementation.",
+        &["impl"],
+        Some(vec![
+            0.00001, 0.00002, 0.00005, 0.0001, 0.0002, 0.0005, 0.0008, 0.001, 0.002, 0.004, 0.008,
+            0.016, 0.032, 0.064,
+        ]),
+    )
+    .unwrap()
+});
+pub(crate) static TRIE_GET_REF_LATENCY_HIST_LEGACY: Lazy<Histogram> =
+    Lazy::new(|| TRIE_GET_REF_LATENCY_HIST.with_label_values(&["legacy"]));
+pub(crate) static TRIE_GET_REF_LATENCY_HIST_FLAT_STATE: Lazy<Histogram> =
+    Lazy::new(|| TRIE_GET_REF_LATENCY_HIST.with_label_values(&["flat_state"]));
 
 pub static CHUNK_CACHE_HITS: Lazy<IntCounterVec> = Lazy::new(|| {
     try_create_int_counter_vec(
