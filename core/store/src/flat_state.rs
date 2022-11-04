@@ -87,6 +87,7 @@ mod imp {
         /// blocks' state are stored in flat storage.
         #[allow(unused)]
         flat_storage_state: FlatStorageState,
+        shard: usize,
     }
 
     #[derive(Clone)]
@@ -121,9 +122,13 @@ mod imp {
             // before going to the DB, check if we have the value cached
             if let Some(cached) = self.flat_storage_state.cached_value_ref(key) {
                 timer.observe_duration();
+                crate::metrics::FLAT_STATE_CACHE_HITS[self.shard].inc();
                 return Ok(cached);
+            } else {
+                crate::metrics::FLAT_STATE_CACHE_MISSES[self.shard].inc();
             }
             let result = store_helper::get_ref(&self.store, key)?;
+
             timer.observe_duration();
             Ok(result)
         }
@@ -241,6 +246,7 @@ mod imp {
                     block_hash,
                     cache,
                     flat_storage_state,
+                    shard: shard_id as usize,
                 })
             }
         }
