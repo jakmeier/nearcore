@@ -1,3 +1,5 @@
+#[cfg(feature = "protocol_feature_flat_state")]
+use near_o11y::metrics::prometheus::core::{AtomicU64, GenericCounter};
 use near_o11y::metrics::{
     try_create_histogram_vec, try_create_int_counter_vec, try_create_int_gauge_vec, Histogram,
     HistogramVec, IntCounterVec, IntGaugeVec,
@@ -28,8 +30,39 @@ pub(crate) static TRIE_GET_REF_LATENCY_HIST: Lazy<HistogramVec> = Lazy::new(|| {
 });
 pub(crate) static TRIE_GET_REF_LATENCY_HIST_LEGACY: Lazy<Histogram> =
     Lazy::new(|| TRIE_GET_REF_LATENCY_HIST.with_label_values(&["legacy"]));
+#[cfg(feature = "protocol_feature_flat_state")]
 pub(crate) static TRIE_GET_REF_LATENCY_HIST_FLAT_STATE: Lazy<Histogram> =
     Lazy::new(|| TRIE_GET_REF_LATENCY_HIST.with_label_values(&["flat_state"]));
+#[cfg(feature = "protocol_feature_flat_state")]
+pub(crate) static FLAT_STATE_CACHE_HITS: Lazy<[GenericCounter<AtomicU64>; 4]> = Lazy::new(|| {
+    let counters = try_create_int_counter_vec(
+        "near_flat_state_cache_hits",
+        "Flat state cache hits",
+        &["shard_id"],
+    )
+    .unwrap();
+    [
+        counters.with_label_values(&["0"]),
+        counters.with_label_values(&["1"]),
+        counters.with_label_values(&["2"]),
+        counters.with_label_values(&["3"]),
+    ]
+});
+#[cfg(feature = "protocol_feature_flat_state")]
+pub(crate) static FLAT_STATE_CACHE_MISSES: Lazy<[GenericCounter<AtomicU64>; 4]> = Lazy::new(|| {
+    let counters = try_create_int_counter_vec(
+        "near_flat_state_cache_misses",
+        "Flat state cache misses",
+        &["shard_id"],
+    )
+    .unwrap();
+    [
+        counters.with_label_values(&["0"]),
+        counters.with_label_values(&["1"]),
+        counters.with_label_values(&["2"]),
+        counters.with_label_values(&["3"]),
+    ]
+});
 
 pub static CHUNK_CACHE_HITS: Lazy<IntCounterVec> = Lazy::new(|| {
     try_create_int_counter_vec(
