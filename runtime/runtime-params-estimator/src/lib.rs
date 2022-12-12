@@ -57,6 +57,7 @@
 //! digging deeper.
 //!
 
+mod action_costs;
 mod cost;
 mod cost_table;
 mod costs_to_runtime_config;
@@ -131,12 +132,16 @@ static ALL_COSTS: &[(Cost, fn(&mut EstimatorContext) -> GasCost)] = &[
     (Cost::ActionSirReceiptCreation, action_sir_receipt_creation),
     (Cost::ActionTransfer, action_transfer),
     (Cost::ActionCreateAccount, action_create_account),
+    (Cost::ActionCreateAccountSendSir, action_costs::create_account_send_sir),
+    (Cost::ActionCreateAccountSendNotSir, action_costs::create_account_send_not_sir),
     (Cost::ActionDeleteAccount, action_delete_account),
     (Cost::ActionAddFullAccessKey, action_add_full_access_key),
     (Cost::ActionAddFunctionAccessKeyBase, action_add_function_access_key_base),
     (Cost::ActionAddFunctionAccessKeyPerByte, action_add_function_access_key_per_byte),
     (Cost::ActionDeleteKey, action_delete_key),
     (Cost::ActionStake, action_stake),
+    (Cost::ActionStakeSendNotSir, action_costs::stake_send_not_sir),
+    (Cost::ActionStakeSendSir, action_costs::stake_send_sir),
     (Cost::ActionDeployContractBase, action_deploy_contract_base),
     (Cost::ActionDeployContractPerByte, action_deploy_contract_per_byte),
     (Cost::ActionFunctionCallBase, action_function_call_base),

@@ -6,10 +6,11 @@ use near_primitives::test_utils::MockEpochInfoProvider;
 use near_primitives::transaction::{ExecutionStatus, SignedTransaction};
 use near_primitives::types::{Gas, MerkleHash};
 use near_primitives::version::PROTOCOL_VERSION;
-use near_store::{ShardTries, ShardUId, Store, StoreCompiledContractCache};
+use near_store::{ShardTries, ShardUId, Store, StoreCompiledContractCache, TrieUpdate};
 use near_vm_logic::VMLimitConfig;
 use node_runtime::{ApplyState, Runtime};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub struct RuntimeTestbed {
@@ -107,10 +108,11 @@ impl RuntimeTestbed {
         transactions: &[SignedTransaction],
         allow_failures: bool,
     ) -> Gas {
+        let trie = self.trie();
         let apply_result = self
             .runtime
             .apply(
-                self.tries.get_trie_for_shard(ShardUId::single_shard(), self.root.clone()),
+                trie,
                 &None,
                 &self.apply_state,
                 &self.prev_receipts,
@@ -151,6 +153,37 @@ impl RuntimeTestbed {
             n += 1;
         }
         n
+    }
+
+    /// Process just the verification of a transaction, without action execution.
+    ///
+    /// Use this method for measuring the SEND cost of actions. This is the
+    /// workload done on the sender's shard before an action receipt is created.
+    /// Network costs for sending are not included.
+    pub fn verify_transaction(
+        &mut self,
+        tx: &SignedTransaction,
+    ) -> Result<node_runtime::VerificationResult, near_primitives::errors::RuntimeError> {
+        let mut state_update = TrieUpdate::new(Rc::new(self.trie()));
+        // gas price and block height can be anything, it doesn't affect performance
+        let gas_price = 1;
+        let block_height = None;
+        // do a full verification
+        let verify_signature = true;
+        node_runtime::verify_and_charge_transaction(
+            &self.apply_state.config,
+            &mut state_update,
+            gas_price,
+            tx,
+            verify_signature,
+            block_height,
+            PROTOCOL_VERSION,
+        )
+    }
+
+    /// Instantiate a new trie for the estimator.
+    fn trie(&mut self) -> near_store::Trie {
+        self.tries.get_trie_for_shard(ShardUId::single_shard(), self.root.clone())
     }
 
     /// Flushes RocksDB memtable

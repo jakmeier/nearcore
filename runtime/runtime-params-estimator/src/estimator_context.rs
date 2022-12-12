@@ -150,4 +150,9 @@ impl Testbed<'_> {
             panic!("Cannot drop OS caches on non-linux systems.");
         }
     }
+
+    // TODO(#8201): integrate fields of RuntimeTestbed in Testbed so that we don't need this
+    pub(crate) fn inner(&mut self) -> &mut RuntimeTestbed {
+        &mut self.inner
+    }
 }

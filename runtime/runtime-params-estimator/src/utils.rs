@@ -85,6 +85,56 @@ pub(crate) fn transaction_cost_ext(
     aggregate_per_block_measurements(block_size, measurements, Some(measurement_overhead))
 }
 
+/// Estimate the gas cost for converting an action in a transaction to one in an
+/// action receipt, without network costs.
+///
+/// To convert a transaction into a receipt, each action has to be verified.
+/// This happens on a different shard than the action execution and should
+/// therefore be estimated and charged separately.
+///
+/// Network costs should also be taken into account here but we don't do that,
+/// yet.
+#[track_caller]
+pub(crate) fn action_send_cost(
+    ctx: &mut EstimatorContext,
+    action: Action,
+    sender_is_receiver: bool,
+) -> GasCost {
+    let metric = ctx.config.metric;
+    let warmup = ctx.config.warmup_iters_per_block;
+    let outer_iters = ctx.config.iter_per_block;
+    let inner_iters = 100;
+    let actions = vec![action; inner_iters];
+    let mut testbed = ctx.testbed();
+
+    let gas_results = iter::repeat_with(|| {
+        verify_actions_cost(&mut testbed, sender_is_receiver, actions.clone(), metric)
+    })
+    .skip(warmup)
+    .take(outer_iters)
+    .collect();
+
+    let base = verify_actions_cost(&mut testbed, sender_is_receiver, vec![], metric);
+
+    let cost_per_tx = average_cost(gas_results);
+    (cost_per_tx - base) / inner_iters as u64
+}
+
+fn verify_actions_cost(
+    testbed: &mut crate::estimator_context::Testbed,
+    sender_is_receiver: bool,
+    actions: Vec<Action>,
+    metric: crate::config::GasMetric,
+) -> GasCost {
+    let tb = testbed.transaction_builder();
+    let sender = tb.random_unused_account();
+    let receiver = if sender_is_receiver { sender.clone() } else { tb.random_unused_account() };
+    let tx = tb.transaction_from_actions(sender.clone(), receiver.clone(), actions);
+    let clock = GasCost::measure(metric);
+    testbed.inner().verify_transaction(&tx).expect("tx verification should not fail in estimator");
+    clock.elapsed()
+}
+
 /// Returns the total measurement overhead for a measured block.
 pub(crate) fn overhead_per_measured_block(
     ctx: &mut EstimatorContext,

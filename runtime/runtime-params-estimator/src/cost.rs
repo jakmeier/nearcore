@@ -60,6 +60,8 @@ pub enum Cost {
     /// an initial balance to it. Subtract the base cost of creating a receipt.
     // TODO(jakmeier): consider also subtracting transfer fee
     ActionCreateAccount,
+    ActionCreateAccountSendSir,
+    ActionCreateAccountSendNotSir,
     // Deploying a new contract for an account on the blockchain stores the WASM
     // code in the trie. Additionally, it also triggers a compilation of the
     // code to check that it is valid WASM. The compiled code is then stored in
@@ -113,6 +115,8 @@ pub enum Cost {
     // TODO(jakmeier): find out and document the reasoning behind send vs exec
     // values in this specific case
     ActionStake,
+    ActionStakeSendNotSir,
+    ActionStakeSendSir,
     /// Estimates `action_creation_config.add_key_cost.full_access_cost` which
     /// is charged for every `Action::AddKey` where the key is a full access
     /// key. The same value is charged for sending and executing.
