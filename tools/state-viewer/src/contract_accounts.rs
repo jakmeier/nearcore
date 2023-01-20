@@ -1,12 +1,16 @@
 //! State viewer functions to list and filter accounts that have contracts
 //! deployed.
 
+use anyhow::Context;
+use borsh::BorshDeserialize;
 use near_primitives::hash::CryptoHash;
+use near_primitives::receipt::{Receipt, ReceiptEnum};
+use near_primitives::transaction::{Action, ExecutionOutcomeWithProof};
 use near_primitives::trie_key::trie_key_parsers::parse_account_id_from_contract_code_key;
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::AccountId;
-use near_store::{NibbleSlice, StorageError, Trie, TrieTraversalItem};
-use std::collections::VecDeque;
+use near_store::{DBCol, NibbleSlice, StorageError, Store, Trie, TrieTraversalItem};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 /// Output type for contract account queries with all relevant data around a
@@ -14,6 +18,8 @@ use std::sync::Arc;
 pub(crate) struct ContractAccount {
     pub(crate) account_id: AccountId,
     pub(crate) source_wasm: Arc<[u8]>,
+    // /// Actions that have been observed to be triggered by the contract.
+    // pub(crate) actions: BTreeSet<ActionType>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -22,6 +28,24 @@ pub enum ContractAccountError {
     InvalidKey(#[source] std::io::Error, Vec<u8>),
     #[error("failed loading contract code for account {1}")]
     NoCode(#[source] StorageError, AccountId),
+}
+
+/// List of supported actions to filter for.
+///
+/// When filtering for an action, only those contracts will be listed that have
+/// executed that action from within a recorded function call.
+#[derive(clap::ArgEnum, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[repr(u8)]
+pub(crate) enum ActionType {
+    CreateAccount,
+    DeployContract,
+    FunctionCall,
+    Transfer,
+    Stake,
+    AddKey,
+    DeleteKey,
+    DeleteAccount,
+    DataReceipt,
 }
 
 impl std::fmt::Display for ContractAccount {
@@ -48,6 +72,7 @@ impl ContractAccount {
             .storage
             .retrieve_raw_bytes(&value_hash)
             .map_err(|err| ContractAccountError::NoCode(err, account_id.clone()))?;
+
         Ok(Self { account_id, source_wasm })
     }
 }
@@ -80,6 +105,79 @@ impl<'a> ContractAccountIterator<'a> {
         let contract_nodes = VecDeque::from(vec_of_nodes);
         Ok(Self { contract_nodes, trie })
     }
+
+    /// todo
+    pub(crate) fn actions(self, store: &Store) -> BTreeMap<AccountId, BTreeSet<ActionType>> {
+        // Find all accounts with contract and create an empty set of actions for each.
+        let mut accounts: BTreeMap<_, _> = self
+            .flat_map(|result| match result {
+                Ok(contract) => Some((contract.account_id, BTreeSet::new())),
+                Err(e) => {
+                    eprintln!("skipping contract due to {e}");
+                    None
+                }
+            })
+            .collect();
+
+        // TODO: iterate receipts
+        // TODO: currently this is repeated per shard, which is bad
+        for pair in store.iter(near_store::DBCol::Receipts) {
+            if let Err(e) = try_find_actions(pair, &mut accounts, store) {
+                eprintln!("skipping receipt due to {e}");
+            }
+        }
+        accounts
+    }
+}
+
+// todo: filter for receiver, -> outcome -> receipt.actions
+fn try_find_actions(
+    raw_kv_pair: std::io::Result<(Box<[u8]>, Box<[u8]>)>,
+    accounts: &mut BTreeMap<AccountId, BTreeSet<ActionType>>,
+    store: &Store,
+) -> anyhow::Result<()> {
+    // key: receipt (CryptoHash)
+    let (raw_receipt_hash, raw_value) = raw_kv_pair?;
+    let receipt = Receipt::deserialize(&mut raw_value.as_ref())?;
+
+    // TODO: consider entry API
+    if accounts.contains_key(&receipt.receiver_id) {
+        // yes, this is a contract in our list
+        // next, check the execution result(s)
+        for pair in store.iter_prefix_ser::<ExecutionOutcomeWithProof>(
+            DBCol::TransactionResultForBlock,
+            &raw_receipt_hash,
+        ) {
+            let (_key, outcome) = pair?;
+            for outgoing_receipt_id in &outcome.outcome.receipt_ids {
+                let outgoing_receipt: Receipt = store
+                    .get_ser(near_store::DBCol::Receipts, outgoing_receipt_id.as_bytes())?
+                    .context("missing outgoing receipt")?;
+                let entry = accounts.get_mut(&receipt.receiver_id).unwrap();
+                match outgoing_receipt.receipt {
+                    ReceiptEnum::Action(action_receipt) => {
+                        for action in &action_receipt.actions {
+                            let action_type = match action {
+                                Action::CreateAccount(_) => ActionType::CreateAccount,
+                                Action::DeployContract(_) => ActionType::DeployContract,
+                                Action::FunctionCall(_) => ActionType::FunctionCall,
+                                Action::Transfer(_) => ActionType::Transfer,
+                                Action::Stake(_) => ActionType::Stake,
+                                Action::AddKey(_) => ActionType::AddKey,
+                                Action::DeleteKey(_) => ActionType::DeleteKey,
+                                Action::DeleteAccount(_) => ActionType::DeleteAccount,
+                            };
+                            entry.insert(action_type);
+                        }
+                    }
+                    ReceiptEnum::Data(_) => {
+                        entry.insert(ActionType::DataReceipt);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Iterator for ContractAccountIterator<'_> {

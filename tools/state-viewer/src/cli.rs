@@ -1,4 +1,5 @@
 use crate::commands::*;
+use crate::contract_accounts::ActionType;
 use crate::dump_state_parts::dump_state_parts;
 use crate::rocksdb_stats::get_rocksdb_stats;
 use crate::{dump_state_parts, epoch_info};
@@ -263,13 +264,14 @@ impl ChunksCmd {
 
 #[derive(Parser)]
 pub struct ContractAccountsCmd {
-    // TODO: add filter options, e.g. only contracts that execute certain
-    // actions
+    /// Only list contracts that spawn actions from within function calls.
+    #[clap(long, arg_enum)]
+    action: Option<ActionType>,
 }
 
 impl ContractAccountsCmd {
     pub fn run(self, home_dir: &Path, near_config: NearConfig, store: Store) {
-        contract_accounts(home_dir, store, near_config).unwrap();
+        contract_accounts(home_dir, store, near_config, self.action).unwrap();
     }
 }
 

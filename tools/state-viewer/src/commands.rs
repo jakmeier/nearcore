@@ -1,4 +1,5 @@
 use crate::apply_chain_range::apply_chain_range;
+use crate::contract_accounts::ActionType;
 use crate::contract_accounts::ContractAccount;
 use crate::state_dump::state_dump;
 use crate::state_dump::state_dump_redis;
@@ -849,6 +850,7 @@ pub(crate) fn contract_accounts(
     home_dir: &Path,
     store: Store,
     near_config: NearConfig,
+    _action_filter: Option<ActionType>,
 ) -> anyhow::Result<()> {
     let (_runtime, state_roots, _header) = load_trie(store.clone(), home_dir, &near_config);
 
@@ -865,11 +867,23 @@ pub(crate) fn contract_accounts(
         let flat_state = None;
         let trie = Trie::new(Box::new(storage), state_root, flat_state);
 
-        for contract in ContractAccount::in_trie(&trie)? {
-            match contract {
-                Ok(contract) => println!("{contract}"),
-                Err(err) => eprintln!("{err}"),
+        // for contract in ContractAccount::in_trie(&trie)? {
+        //     match contract {
+        //         Ok(contract) => println!("{contract}"),
+        //         Err(err) => eprintln!("{err}"),
+        //     }
+        // }
+
+        for (account_id, actions) in ContractAccount::in_trie(&trie)?.actions(&store) {
+            print!("{account_id:<64} ");
+            for (i, action) in actions.iter().enumerate() {
+                if i != 0 {
+                    print!(",");
+                } else {
+                    print!("{action:?}");
+                }
             }
+            println!();
         }
     }
     Ok(())
