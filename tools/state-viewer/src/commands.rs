@@ -1,6 +1,7 @@
 use crate::apply_chain_range::apply_chain_range;
 use crate::contract_accounts::ActionType;
 use crate::contract_accounts::ContractAccount;
+use crate::contract_accounts::ContractAccountIterator;
 use crate::state_dump::state_dump;
 use crate::state_dump::state_dump_redis;
 use crate::tx_dump::dump_tx_from_block;
@@ -854,6 +855,8 @@ pub(crate) fn contract_accounts(
 ) -> anyhow::Result<()> {
     let (_runtime, state_roots, _header) = load_trie(store.clone(), home_dir, &near_config);
 
+    let mut shard_accounts = vec![];
+    let mut tries = vec![];
     for (shard_id, &state_root) in state_roots.iter().enumerate() {
         eprintln!("Starting shard {shard_id}");
         // TODO: This assumes simple nightshade layout, it will need an update when we reshard.
@@ -866,6 +869,7 @@ pub(crate) fn contract_accounts(
         // We don't need flat state to traverse all accounts.
         let flat_state = None;
         let trie = Trie::new(Box::new(storage), state_root, flat_state);
+        tries.push(trie);
 
         // for contract in ContractAccount::in_trie(&trie)? {
         //     match contract {
@@ -874,17 +878,35 @@ pub(crate) fn contract_accounts(
         //     }
         // }
 
-        for (account_id, actions) in ContractAccount::in_trie(&trie)?.actions(&store) {
-            print!("{account_id:<64} ");
-            for (i, action) in actions.iter().enumerate() {
-                if i != 0 {
-                    print!(",");
-                } else {
-                    print!("{action:?}");
-                }
-            }
-            println!();
-        }
+        // for (account_id, actions) in ContractAccount::in_trie(&trie)?.actions(&store) {
+        //     print!("{account_id:<64} ");
+        //     for (i, action) in actions.iter().enumerate() {
+        //         if i != 0 {
+        //             print!(",");
+        //         }
+        //         print!("{action:?}");
+        //     }
+        //     println!();
+        // }
+
+        // shard_accounts.push(ContractAccount::in_trie(tries.last().unwrap())?);
     }
+    for trie in &tries {
+        shard_accounts.push(ContractAccount::in_trie(trie)?);
+    }
+
+    for (account_id, actions) in
+        ContractAccountIterator::multi_shard_actions(shard_accounts, &store)
+    {
+        print!("{account_id:<64} ");
+        for (i, action) in actions.iter().enumerate() {
+            if i != 0 {
+                print!(",");
+            }
+            print!("{action:?}");
+        }
+        println!();
+    }
+
     Ok(())
 }

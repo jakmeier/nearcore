@@ -128,6 +128,29 @@ impl<'a> ContractAccountIterator<'a> {
         }
         accounts
     }
+
+    pub(crate) fn multi_shard_actions(
+        iters: Vec<Self>,
+        store: &Store,
+    ) -> BTreeMap<AccountId, BTreeSet<ActionType>> {
+        let total_iter = iters.into_iter().flatten();
+        let mut accounts: BTreeMap<_, _> = total_iter
+            .flat_map(|result| match result {
+                Ok(contract) => Some((contract.account_id, BTreeSet::new())),
+                Err(e) => {
+                    eprintln!("skipping contract due to {e}");
+                    None
+                }
+            })
+            .collect();
+
+        for pair in store.iter(near_store::DBCol::Receipts) {
+            if let Err(e) = try_find_actions(pair, &mut accounts, store) {
+                eprintln!("skipping receipt due to {e}");
+            }
+        }
+        accounts
+    }
 }
 
 // todo: filter for receiver, -> outcome -> receipt.actions
