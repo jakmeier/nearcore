@@ -149,3 +149,40 @@ gcloud beta compute ssh --zone "europe-west4-a" "<machine>"  --project "rpc-prod
 
 Check running instances at <https://console.cloud.google.com/compute/instances?project=rpc-prod> to see the machine
 name and datacenter.
+
+### contract-accounts
+
+List account names with contracts deployed and additional information about the
+contracts.
+
+By default, the command only displays the names of all accounts that have a
+contract deployed right now. This should be fairly quick. Using flags, you can
+display more information but it will also slow down the process.
+
+To see a list of flags, run 
+```
+cargo run -p neard -- view-state contract-accounts --help
+```
+
+#### Example
+
+The following command lists all (but the skipped) accounts with contracts
+deployed with the additional information of how many times the account has been
+the receiver of a receipt and how many times a receipt was sent by the contract.
+(Note: outgoing counts only sent by the contract, not anything where the signed
+was the same account id.)
+
+Additionally, the output contains a list of actions that were in the outgoing
+receipts. This is particularly useful to find contracts that call certain
+actions on-chain.
+
+```bash
+cargo run -p neard -- view-state contract-accounts \
+  --skip-accounts "aurora,relay.aurora,token.sweat,oracle.sweat,tge-lockup.near,sweat_welcome.near" \
+  --receipts-in \
+  --receipts-out \
+  --actions \
+  > output.log
+```
+
+TODO: insert sample output
