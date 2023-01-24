@@ -662,6 +662,8 @@ mod tests {
             actions: true,
             receipts_in: true,
             receipts_out: true,
+            select_accounts: None,
+            skip_accounts: None,
         }
     }
 
