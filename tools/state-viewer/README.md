@@ -185,4 +185,22 @@ cargo run -p neard -- view-state contract-accounts \
   > output.log
 ```
 
-TODO: insert sample output
+And the output may look something like thi:
+```
+ACCOUNT_ID                                                         RCPTS_IN  RCPTS_OUT ACTIONS
+0-0.near                                                                 37         14 Transfer
+0-1.near                                                                797        117 Transfer
+0.app.hipodev.near                                                        8          9 Transfer
+0.app2.hipodev.near                                                       4          5 Transfer
+0.near                                                                   56          9 Transfer
+00.near                                                                  29          5 Transfer
+000.near                                                                190         17 Transfer
+0000.mintbase1.near                                                      49         68 FunctionCall,Transfer
+...
+And 18858 errors:
+failed loading outgoing receipt DpoPSrAHECYrpntTdYXrp2W2Ad3yEPyMyCav4mXi8kyh
+failed loading outgoing receipt BoSv67f3CYsWu9LfLxPNkKGSEnwiH7jwPzEmYwL5c7rm
+...
+failed loading outgoing receipt D4AEcD6umuJKGjSNA2JEZ4EMxn3GK4Z8Ew1iAQpWYtPS
+failed loading outgoing receipt AAht3HUDJeGRJ1N776ZKJ2vRiRBAD9GtsLabgbrdioAC
+```
