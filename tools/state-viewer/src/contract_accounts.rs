@@ -342,13 +342,13 @@ fn try_find_actions_spawned_by_receipt(
                                     Action::Transfer(transfer) => {
                                         if outgoing_receipt.predecessor_id.is_system() {
                                             if last_refund.is_some() {
-                                                println!("ERROR: more than one refund");
+                                                println!("ERROR: more than one refund for {key}");
                                             }
                                             // need to take price of outer receipt, refund has 0 price
                                             let price = match &receipt.receipt {
                                                 ReceiptEnum::Action(r) => r.gas_price,
                                                 ReceiptEnum::Data(_) => {
-                                                    println!("ERROR: data refund!?");
+                                                    println!("ERROR: data refund!? {key}");
                                                     1
                                                 }
                                             };
