@@ -344,9 +344,19 @@ fn try_find_actions_spawned_by_receipt(
                                             if last_refund.is_some() {
                                                 println!("ERROR: more than one refund");
                                             }
+                                            // need to take price of outer receipt, refund has 0 price
+                                            let price = match &receipt.receipt {
+                                                ReceiptEnum::Action(r) => r.gas_price,
+                                                ReceiptEnum::Data(_) => {
+                                                    println!("ERROR: data refund!?");
+                                                    1
+                                                }
+                                            };
                                             last_refund = Some(RefundReceipt {
-                                                gas_refunded: (transfer.deposit
-                                                    / action_receipt.gas_price)
+                                                gas_refunded: transfer
+                                                    .deposit
+                                                    .checked_div(price)
+                                                    .unwrap_or(0)
                                                     as u64, // XXX: this does not account for pessimistic gas refunds...
                                                 id: *outgoing_receipt_id,
                                             });
