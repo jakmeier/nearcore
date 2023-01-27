@@ -9,7 +9,7 @@ use near_primitives::trie_key::trie_key_parsers::parse_account_id_from_contract_
 use near_primitives::trie_key::TrieKey;
 use near_primitives::types::AccountId;
 use near_store::{DBCol, NibbleSlice, StorageError, Store, Trie, TrieTraversalItem};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 
 type Result<T> = std::result::Result<T, ContractAccountError>;
 
@@ -48,6 +48,15 @@ pub(crate) struct ContractInfo {
     ///
     /// Not available in iterator stream, only in the summary.
     pub(crate) receipts_out: Option<usize>,
+
+    /// WIP / HACK / FOR #8427
+    pub(crate) min_create_account_refund_receipts: BinaryHeap<RefundReceipt>,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RefundReceipt {
+    gas_refunded: near_primitives::types::Gas,
+    id: CryptoHash,
 }
 
 /// Describe the desired output of a `ContractAccountIterator`.
@@ -311,6 +320,8 @@ fn try_find_actions_spawned_by_receipt(
                 *entry.receipts_out.get_or_insert(0) += outcome.outcome.receipt_ids.len();
             }
             if filter.actions {
+                let mut haz_create_account = false;
+                let mut last_refund = None;
                 for outgoing_receipt_id in &outcome.outcome.receipt_ids {
                     let maybe_outgoing_receipt: Option<Receipt> = store
                         .get_ser(near_store::DBCol::Receipts, outgoing_receipt_id.as_bytes())
@@ -322,10 +333,28 @@ fn try_find_actions_spawned_by_receipt(
                         ReceiptEnum::Action(action_receipt) => {
                             for action in &action_receipt.actions {
                                 let action_type = match action {
-                                    Action::CreateAccount(_) => ActionType::CreateAccount,
+                                    Action::CreateAccount(_) => {
+                                        haz_create_account = true;
+                                        ActionType::CreateAccount
+                                    }
                                     Action::DeployContract(_) => ActionType::DeployContract,
                                     Action::FunctionCall(_) => ActionType::FunctionCall,
-                                    Action::Transfer(_) => ActionType::Transfer,
+                                    Action::Transfer(transfer) => {
+                                        if outgoing_receipt.predecessor_id.is_system() {
+                                            if last_refund.is_some() {
+                                                println!("ERROR: more than one refund");
+                                            }
+                                            last_refund = Some(RefundReceipt {
+                                                gas_refunded: (transfer.deposit
+                                                    / action_receipt.gas_price)
+                                                    as u64, // XXX: this does not account for pessimistic gas refunds...
+                                                id: *outgoing_receipt_id,
+                                            });
+                                            // don't record refund transfers
+                                            continue;
+                                        }
+                                        ActionType::Transfer
+                                    }
                                     Action::Stake(_) => ActionType::Stake,
                                     Action::AddKey(_) => ActionType::AddKey,
                                     Action::DeleteKey(_) => ActionType::DeleteKey,
@@ -343,6 +372,16 @@ fn try_find_actions_spawned_by_receipt(
                                 .get_or_insert_with(Default::default)
                                 .insert(ActionType::DataReceipt);
                         }
+                    }
+                }
+                if haz_create_account {
+                    if let Some(refund) = last_refund {
+                        entry.min_create_account_refund_receipts.push(refund);
+                        if entry.min_create_account_refund_receipts.len() > 10 {
+                            entry.min_create_account_refund_receipts.pop();
+                        }
+                    } else {
+                        println!("ERROR: No refund for {key}");
                     }
                 }
             }
@@ -431,6 +470,9 @@ fn fmt_account_id_and_info(
             }
             write!(f, "{action:?}")?;
         }
+    }
+    for refund in &info.min_create_account_refund_receipts {
+        write!(f, "  [ Refund {} gas {} ]", refund.gas_refunded, refund.id)?;
     }
     Ok(())
 }
