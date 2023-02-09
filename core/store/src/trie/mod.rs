@@ -12,7 +12,6 @@ use near_primitives::contract::ContractCode;
 use near_primitives::hash::{hash, CryptoHash};
 pub use near_primitives::shard_layout::ShardUId;
 use near_primitives::state::ValueRef;
-#[cfg(feature = "protocol_feature_flat_state")]
 use near_primitives::state_record::is_delayed_receipt_key;
 use near_primitives::state_record::StateRecord;
 use near_primitives::trie_key::TrieKey;
@@ -954,22 +953,18 @@ impl Trie {
         mode: KeyLookupMode,
     ) -> Result<Option<ValueRef>, StorageError> {
         let key_nibbles = NibbleSlice::new(key);
-        let result = self.lookup(key_nibbles);
-
-        // For now, to test correctness, flat storage does double the work and
-        // compares the results. This needs to be changed when the features is
-        // stabilized.
-        #[cfg(feature = "protocol_feature_flat_state")]
+        let is_delayed = is_delayed_receipt_key(key);
+        if cfg!(feature = "protocol_feature_flat_state")
+            && matches!(mode, KeyLookupMode::FlatStorage)
+            && !is_delayed
         {
-            let is_delayed = is_delayed_receipt_key(key);
-            if matches!(mode, KeyLookupMode::FlatStorage) && !is_delayed {
-                if let Some(flat_state) = &self.flat_state {
-                    let flat_result = flat_state.get_ref(&key);
-                    assert_eq!(result, flat_result);
-                }
+            if let Some(flat_state) = &self.flat_state {
+                // flat state lookup
+                return flat_state.get_ref(&key);
             }
         }
-        result
+        // normal trie lookup
+        self.lookup(key_nibbles)
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
