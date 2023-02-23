@@ -423,6 +423,7 @@ impl FlatStateDelta {
     pub fn apply_to_flat_state(self, _store_update: &mut StoreUpdate) {}
 }
 
+use lru::LruCache;
 use near_o11y::metrics::IntGauge;
 use near_primitives::errors::StorageError;
 use near_primitives::shard_layout::ShardLayout;
@@ -482,6 +483,11 @@ struct FlatStorageStateInner {
     /// All these deltas here are stored on disk too.
     #[allow(unused)]
     deltas: HashMap<CryptoHash, Arc<FlatStateDelta>>,
+    /// Cache for the mapping from trie storage keys to value refs for `flat_head`.
+    /// Must be equivalent to the mapping stored on disk only for `flat_head`. For
+    /// other blocks, deltas have to be applied as usual.
+    #[allow(unused)]
+    value_ref_cache: LruCache<Vec<u8>, Option<ValueRef>>,
     #[allow(unused)]
     metrics: FlatStorageMetrics,
 }
@@ -494,6 +500,10 @@ struct FlatStorageMetrics {
     cached_deltas_size: IntGauge,
     #[allow(unused)]
     distance_to_head: IntGauge,
+    #[allow(unused)]
+    value_ref_cache_len: IntGauge,
+    #[allow(unused)]
+    value_ref_cache_total_key_size: IntGauge,
 }
 
 /// Number of traversed parts during a single step of fetching state.
@@ -870,6 +880,23 @@ impl FlatStorageStateInner {
 
         Ok(blocks)
     }
+
+    #[allow(unused)]
+    fn put_value_ref_to_cache(&mut self, key: Vec<u8>, value: Option<ValueRef>) {
+        if let Some((key, _)) = self.value_ref_cache.push(key.to_vec(), value) {
+            self.metrics.value_ref_cache_total_key_size.sub(key.len() as i64);
+        }
+        if self.value_ref_cache.cap() > 0 {
+            self.metrics.value_ref_cache_total_key_size.add(key.len() as i64);
+        }
+        self.metrics.value_ref_cache_len.set(self.value_ref_cache.len() as i64);
+    }
+
+    /// Get cached `ValueRef` for flat storage head.
+    #[cfg(feature = "protocol_feature_flat_state")]
+    fn get_cached_ref(&mut self, key: &[u8]) -> Option<Option<ValueRef>> {
+        self.value_ref_cache.get(key).cloned()
+    }
 }
 
 impl FlatStorageState {
@@ -883,6 +910,7 @@ impl FlatStorageState {
         // Unfortunately we don't have access to ChainStore inside this file because of package
         // dependencies, so we pass these functions in to access chain info
         chain_access: &dyn ChainAccessForFlatStorage,
+        cache_capacity: usize,
     ) -> Self {
         let flat_head = store_helper::get_flat_head(&store, shard_id)
             .unwrap_or_else(|| panic!("Cannot read flat head for shard {} from storage", shard_id));
@@ -911,6 +939,10 @@ impl FlatStorageState {
             cached_deltas_size: metrics::FLAT_STORAGE_CACHED_DELTAS_SIZE
                 .with_label_values(&[shard_id_label]),
             distance_to_head: metrics::FLAT_STORAGE_DISTANCE_TO_HEAD
+                .with_label_values(&[shard_id_label]),
+            value_ref_cache_len: metrics::FLAT_STORAGE_VALUE_REF_CACHE_LEN
+                .with_label_values(&[shard_id_label]),
+            value_ref_cache_total_key_size: metrics::FLAT_STORAGE_VALUE_REF_CACHE_TOTAL_KEY_SIZE
                 .with_label_values(&[shard_id_label]),
         };
         metrics.flat_head_height.set(flat_head_height as i64);
@@ -946,6 +978,7 @@ impl FlatStorageState {
             flat_head,
             blocks,
             deltas,
+            value_ref_cache: LruCache::new(cache_capacity),
             metrics,
         })))
     }
@@ -977,7 +1010,7 @@ impl FlatStorageState {
         block_hash: &CryptoHash,
         key: &[u8],
     ) -> Result<Option<ValueRef>, crate::StorageError> {
-        let guard = self.0.write().expect(POISONED_LOCK_ERR);
+        let mut guard = self.0.write().expect(POISONED_LOCK_ERR);
         let blocks_to_head =
             guard.get_blocks_to_head(block_hash).map_err(|e| StorageError::from(e))?;
         for block_hash in blocks_to_head.iter() {
@@ -991,7 +1024,13 @@ impl FlatStorageState {
             };
         }
 
-        Ok(store_helper::get_ref(&guard.store, key)?)
+        if let Some(value_ref) = guard.get_cached_ref(key) {
+            return Ok(value_ref);
+        }
+
+        let value_ref = store_helper::get_ref(&guard.store, key)?;
+        guard.put_value_ref_to_cache(key.to_vec(), value_ref.clone());
+        Ok(value_ref)
     }
 
     #[cfg(not(feature = "protocol_feature_flat_state"))]
@@ -1014,6 +1053,9 @@ impl FlatStorageState {
         for block in blocks.into_iter().rev() {
             let mut store_update = StoreUpdate::new(guard.store.storage.clone());
             let delta = guard.get_delta(&block)?.as_ref().clone();
+            for (key, value) in delta.0.iter() {
+                guard.put_value_ref_to_cache(key.clone(), value.clone());
+            }
             delta.apply_to_flat_state(&mut store_update);
             store_helper::set_flat_head(&mut store_update, guard.shard_id, &block);
 
@@ -1399,7 +1441,7 @@ mod tests {
         }
         store_update.commit().unwrap();
 
-        let flat_storage_state = FlatStorageState::new(store.clone(), 0, 4, &chain);
+        let flat_storage_state = FlatStorageState::new(store.clone(), 0, 4, &chain, 0);
         let flat_state_factory = FlatStateFactory::new(store.clone());
         flat_state_factory.add_flat_storage_state_for_shard(0, flat_storage_state);
         let flat_storage_state = flat_state_factory.get_flat_storage_state_for_shard(0).unwrap();
@@ -1446,7 +1488,7 @@ mod tests {
         store_update.commit().unwrap();
 
         // Check that flat storage state is created correctly for chain which has skipped heights.
-        let flat_storage_state = FlatStorageState::new(store.clone(), 0, 8, &chain);
+        let flat_storage_state = FlatStorageState::new(store.clone(), 0, 8, &chain, 0);
         let flat_state_factory = FlatStateFactory::new(store.clone());
         flat_state_factory.add_flat_storage_state_for_shard(0, flat_storage_state);
         let flat_storage_state = flat_state_factory.get_flat_storage_state_for_shard(0).unwrap();
@@ -1456,12 +1498,11 @@ mod tests {
         assert_eq!(flat_storage_state.update_flat_head(&flat_head_hash), Ok(()));
     }
 
-    // This test tests basic use cases for FlatState and FlatStorageState.
+    // This setup tests basic use cases for FlatState and FlatStorageState.
     // We created a linear chain with no forks, start with flat head at the genesis block, then
     // moves the flat head forward, which checking that flat_state.get_ref() still returns the correct
     // values and the state is being updated in store.
-    #[test]
-    fn flat_storage_state_sanity() {
+    fn flat_storage_state_sanity(cache_capacity: usize) {
         // 1. Create a chain with 10 blocks with no forks. Set flat head to be at block 0.
         //    Block i sets value for key &[1] to &[i].
         let mut chain = MockChain::linear_chain(10);
@@ -1480,7 +1521,7 @@ mod tests {
         }
         store_update.commit().unwrap();
 
-        let flat_storage_state = FlatStorageState::new(store.clone(), 0, 9, &chain);
+        let flat_storage_state = FlatStorageState::new(store.clone(), 0, 9, &chain, cache_capacity);
         let flat_state_factory = FlatStateFactory::new(store.clone());
         flat_state_factory.add_flat_storage_state_for_shard(0, flat_storage_state);
         let flat_storage_state = flat_state_factory.get_flat_storage_state_for_shard(0).unwrap();
@@ -1558,5 +1599,15 @@ mod tests {
             store_helper::get_delta(&store, 0, chain.get_block_hash(10)).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn flat_storage_state_sanity_cache() {
+        flat_storage_state_sanity(100);
+    }
+
+    #[test]
+    fn flat_storage_state_sanity_no_cache() {
+        flat_storage_state_sanity(0);
     }
 }
