@@ -1018,12 +1018,18 @@ impl FlatStorageState {
             };
         }
 
-        if let Some(value_ref) = guard.get_cached_ref(key) {
-            return Ok(value_ref);
-        }
+        const MAX_KEY_LEN: usize = 200;
 
+        if key.len() <= MAX_KEY_LEN {
+            if let Some(value_ref) = guard.get_cached_ref(key) {
+                return Ok(value_ref);
+            }
+        }
+            
         let value_ref = store_helper::get_ref(&guard.store, key)?;
-        guard.put_value_ref_to_cache(key.to_vec(), value_ref.clone());
+        if key.len() <= MAX_KEY_LEN {
+            guard.put_value_ref_to_cache(key.to_vec(), value_ref.clone());
+        }
         Ok(value_ref)
     }
 
