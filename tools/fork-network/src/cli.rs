@@ -148,9 +148,9 @@ impl ForkNetworkCommand {
             public_key: self_validator.public_key().clone(),
         };
         let other_account: AccountInfo = AccountInfo {
-            account_id: "validator1.test.near".parse().unwrap(),
+            account_id: self_validator.validator_id().clone(), // using same account but different public key
             amount: 50_000 * NEAR_BASE,
-            public_key: "ed25519:6bYBbZRNnFnCTv7GomDioFaqivH7NYgDhUrcdr38vRXu".parse().unwrap(),
+            public_key: "ed25519:6bYBbZRNnFnCTv7GomDioFaqivH7NYgDhUrcdr38vRXu".parse().unwrap(), // hard coded PK
         };
 
         let mut storage_mutator = StorageMutator::new(
