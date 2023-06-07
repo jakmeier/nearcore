@@ -142,10 +142,15 @@ impl ForkNetworkCommand {
             .collect::<Vec<_>>();
 
         let self_validator = near_config.validator_signer.as_ref().unwrap();
-        let self_account = AccountInfo {
+        let self_account: AccountInfo = AccountInfo {
             account_id: self_validator.validator_id().clone(),
             amount: 50_000 * NEAR_BASE,
             public_key: self_validator.public_key().clone(),
+        };
+        let other_account: AccountInfo = AccountInfo {
+            account_id: "validator1.test.near".parse().unwrap(),
+            amount: 50_000 * NEAR_BASE,
+            public_key: "ed25519:6bYBbZRNnFnCTv7GomDioFaqivH7NYgDhUrcdr38vRXu".parse().unwrap(),
         };
 
         let mut storage_mutator = StorageMutator::new(
@@ -155,20 +160,24 @@ impl ForkNetworkCommand {
             *flat_head_block.header().prev_hash(),
             &prev_state_roots,
         )?;
+        let validators = vec![self_account, other_account];
 
-        let runtime_config_store = RuntimeConfigStore::new(None);
-        let runtime_config = runtime_config_store.get_config(PROTOCOL_VERSION);
-        let storage_bytes = runtime_config.fees.storage_usage_config.num_bytes_account;
-        let liquid_balance = 100_000_000 * NEAR_BASE;
-        storage_mutator.set_account(
-            self_validator.validator_id().clone(),
-            Account::new(liquid_balance, self_account.amount, CryptoHash::default(), storage_bytes),
-        )?;
-        storage_mutator.set_access_key(
-            self_account.account_id.clone(),
-            self_account.public_key.clone(),
-            AccessKey::full_access(),
-        )?;
+        for account in &validators {
+            
+            let runtime_config_store = RuntimeConfigStore::new(None);
+            let runtime_config = runtime_config_store.get_config(PROTOCOL_VERSION);
+            let storage_bytes = runtime_config.fees.storage_usage_config.num_bytes_account;
+            let liquid_balance = 100_000_000 * NEAR_BASE;
+            storage_mutator.set_account(
+                self_validator.validator_id().clone(),
+                Account::new(liquid_balance, account.amount, CryptoHash::default(), storage_bytes),
+            )?;
+            storage_mutator.set_access_key(
+                account.account_id.clone(),
+                account.public_key.clone(),
+                AccessKey::full_access(),
+            )?;
+        }
 
         let new_state_roots = storage_mutator.commit()?;
 
@@ -203,7 +212,7 @@ impl ForkNetworkCommand {
             minimum_stake_ratio: epoch_config.validator_selection_config.minimum_stake_ratio,
             dynamic_resharding: false,
             protocol_version: epoch_info.protocol_version(),
-            validators: vec![self_account],
+            validators,
             gas_price_adjustment_rate: original_config.gas_price_adjustment_rate,
             gas_limit: original_config.gas_limit,
             max_gas_price: original_config.max_gas_price,
