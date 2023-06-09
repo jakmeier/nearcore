@@ -148,9 +148,9 @@ impl ForkNetworkCommand {
             public_key: self_validator.public_key().clone(),
         };
         let other_account: AccountInfo = AccountInfo {
-            account_id: self_validator.validator_id().clone(), // using same account but different public key
+            account_id: "validator1.test.near".parse().unwrap(),
             amount: 50_000 * NEAR_BASE,
-            public_key: "ed25519:6bYBbZRNnFnCTv7GomDioFaqivH7NYgDhUrcdr38vRXu".parse().unwrap(), // hard coded PK
+            public_key: "ed25519:6bYBbZRNnFnCTv7GomDioFaqivH7NYgDhUrcdr38vRXu".parse().unwrap(),
         };
 
         let mut storage_mutator = StorageMutator::new(
@@ -161,15 +161,15 @@ impl ForkNetworkCommand {
             &prev_state_roots,
         )?;
         let validators = vec![self_account, other_account];
+        
+        let runtime_config_store = RuntimeConfigStore::new(None);
+        let runtime_config = runtime_config_store.get_config(PROTOCOL_VERSION);
+        let storage_bytes = runtime_config.fees.storage_usage_config.num_bytes_account;
+        let liquid_balance = 100_000_000 * NEAR_BASE;
 
         for account in &validators {
-            
-            let runtime_config_store = RuntimeConfigStore::new(None);
-            let runtime_config = runtime_config_store.get_config(PROTOCOL_VERSION);
-            let storage_bytes = runtime_config.fees.storage_usage_config.num_bytes_account;
-            let liquid_balance = 100_000_000 * NEAR_BASE;
             storage_mutator.set_account(
-                self_validator.validator_id().clone(),
+                account.account_id.clone(),
                 Account::new(liquid_balance, account.amount, CryptoHash::default(), storage_bytes),
             )?;
             storage_mutator.set_access_key(
