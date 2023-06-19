@@ -242,8 +242,8 @@ impl ApplyMetrics {
     fn update_accumulated(&mut self, gas: u64, compute: u64) -> (u64, u64) {
         // Use saturating sub, wrong metrics are better than an overflow panic.
         let delta = (
-            self.accumulated_gas.saturating_sub(gas),
-            self.accumulated_compute.saturating_sub(compute),
+            gas.saturating_sub(self.accumulated_gas),
+            compute.saturating_sub(self.accumulated_compute),
         );
         self.accumulated_gas = gas;
         self.accumulated_compute = compute;
