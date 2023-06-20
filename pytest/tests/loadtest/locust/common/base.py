@@ -245,7 +245,7 @@ class NearNodeProxy:
         # poll for tx result, using "EXPERIMENTAL_tx_status" which waits for
         # all receipts to finish rather than just the first one, as "tx" would do
         result_response = self.post_json("EXPERIMENTAL_tx_status", params)
-        logger.debug(f"polling, got: {result_response}")
+        logger.debug(f"polling, got: {result_response.status_code} {result_response.json()}")
 
         try:
             meta["response"] = evaluate_rpc_result(result_response.json())
