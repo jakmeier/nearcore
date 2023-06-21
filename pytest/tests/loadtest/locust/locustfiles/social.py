@@ -23,6 +23,7 @@ class SocialDbUser(NearUser):
     following, and liking posts.
     """
     wait_time = between(1, 3)  # random pause between transactions
+    weight = 3
     registered_users = []
 
     @task

@@ -23,6 +23,7 @@ class FTTransferUser(NearUser):
     random users.
     """
     wait_time = between(1, 3)  # random pause between transactions
+    weight = 6
 
     @task
     def ft_transfer(self):

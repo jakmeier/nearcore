@@ -21,6 +21,7 @@ class CongestionUser(NearUser):
     Runs a resource-heavy workload that is likely to cause congestion.
     """
     wait_time = between(1, 3)  # random pause between transactions
+    weight = 1
 
     @task
     def compute_sha256(self):
