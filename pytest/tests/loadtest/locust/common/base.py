@@ -279,7 +279,7 @@ class NearNodeProxy:
                 submit_response = submit_raw_response.json()
                 # extract transaction ID from response, it should be "{ "result": "id...." }"
                 if not "result" in submit_response:
-                    meta["exception"] = RpcError(submit_response,
+                    meta["exception"] = RpcError(details=submit_response,
                                                  message="Didn't get a TX ID")
                     meta["response"] = submit_response.content
                 else:
@@ -398,6 +398,10 @@ class NearUser(User):
 class NearError(Exception):
 
     def __init__(self, message, details):
+        """
+        The `message` is used in locust to aggregate errors and is also displayed in the UI.
+        The `details` are logged as additional information in the console.
+        """
         self.message = message
         self.details = details
         super().__init__(message)
@@ -405,8 +409,8 @@ class NearError(Exception):
 
 class RpcError(NearError):
 
-    def __init__(self, error, message="RPC returned an error"):
-        super().__init__(message, error)
+    def __init__(self, message="RPC returned an error", details=None):
+        super().__init__(message, details)
 
 
 class TxUnknownError(RpcError):
@@ -415,7 +419,7 @@ class TxUnknownError(RpcError):
         self,
         message="RPC does not know the result of this TX, probably it is not executed yet"
     ):
-        super().__init__(message)
+        super().__init__(message=message)
 
 
 class InvalidNonceError(RpcError):
@@ -426,6 +430,8 @@ class InvalidNonceError(RpcError):
         ak_nonce,
     ):
         super().__init__(
+            message="Nonce too small",
+            details=
             f"Tried to use nonce {used_nonce} but access key nonce is {ak_nonce}"
         )
         self.ak_nonce = ak_nonce
@@ -480,7 +486,7 @@ def evaluate_rpc_result(rpc_result):
                 raise InvalidNonceError(
                     err_description["InvalidNonce"]["tx_nonce"],
                     err_description["InvalidNonce"]["ak_nonce"])
-        raise RpcError(rpc_result["error"])
+        raise RpcError(details=rpc_result["error"])
 
     result = rpc_result["result"]
     transaction_outcome = result["transaction_outcome"]
