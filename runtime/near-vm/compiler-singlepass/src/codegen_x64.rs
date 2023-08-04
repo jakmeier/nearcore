@@ -393,7 +393,42 @@ impl<'a> FuncGen<'a> {
             Location::GPR(current_burnt_reg),
         );
         // Compute new cost.
-        self.assembler.emit_add(Size::S64, cost_location, Location::GPR(current_burnt_reg));
+
+        // old buggy code
+        // self.assembler.emit_add(Size::S64, cost_location, Location::GPR(current_burnt_reg));
+
+        // ad-hoc fix to prove that it works, we should probably do something better and also check if other users of `emit_add` have a similar problem
+        match cost_location {
+            Location::Imm32(c) if c >= 1 << 31 => {
+                // taking an imm32 and adding it to a 64bit GPR will sign-extend the imm32
+                // this means that if the highest bit of our trusty rust u32 is set, it will be extended to a very large u64
+                // as if it were a signed integer, so if the first bit is set, that's bad news
+                self.assembler.emit_add(
+                    Size::S64,
+                    Location::Imm32(1 << 30),
+                    Location::GPR(current_burnt_reg),
+                );
+                self.assembler.emit_jmp(Condition::Carry, self.special_labels.integer_overflow);
+
+                self.assembler.emit_add(
+                    Size::S64,
+                    Location::Imm32(1 << 30),
+                    Location::GPR(current_burnt_reg),
+                );
+                self.assembler.emit_jmp(Condition::Carry, self.special_labels.integer_overflow);
+
+                self.assembler.emit_add(
+                    Size::S64,
+                    Location::Imm32(c - (1 << 31)),
+                    Location::GPR(current_burnt_reg),
+                );
+                self.assembler.emit_jmp(Condition::Carry, self.special_labels.integer_overflow);
+            }
+            _ => {
+                self.assembler.emit_add(Size::S64, cost_location, Location::GPR(current_burnt_reg));
+            }
+        }
+
         self.assembler.emit_jmp(Condition::Carry, self.special_labels.integer_overflow);
         // Compare with the limit.
         self.assembler.emit_cmp(

@@ -1087,17 +1087,8 @@ fn test_i_am_human_arithmetic_trap() {
         .deposit(8u128 * 10u128.pow(21))
         .input(INPUT.as_bytes().to_vec())
         .storage_value(b"STATE", STATE)
-
-        // near-vm gives this
         .expect(expect![[r#"
-            VMOutcome: balance 8000000000000000000002 storage_usage 12 return data None burnt gas 712380595914 used gas 712380595914
-            Err: WebAssembly trap: An arithmetic exception, e.g. divided by zero.
+            VMOutcome: balance 8000000000000000000002 storage_usage 12 return data None burnt gas 7543360465350 used gas 7543360465350
+            Err: Smart contract panicked: signature error: invalid signature
         "#]]);
-
-    // wasmer2 gives this
-    // .only_wasmer2()
-    // .expect(expect![[r#"
-    //     VMOutcome: balance 8000000000000000000002 storage_usage 12 return data None burnt gas 7543360465350 used gas 7543360465350
-    //     Err: Smart contract panicked: signature error: invalid signature
-    // "#]]);
 }
