@@ -65,6 +65,7 @@ assert_matches.workspace = true
 bolero.workspace = true
 expect-test.workspace = true
 hex.workspace = true
+near-o11y.workspace = true
 near-primitives.workspace = true
 near-test-contracts.workspace = true
 rand.workspace = true

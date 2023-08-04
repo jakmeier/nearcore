@@ -1059,3 +1059,45 @@ mod fix_contract_loading_cost_protocol_upgrade {
             ]);
     }
 }
+
+/*
+
+HACKY REPRODUCTION OF https://github.com/near/nearcore/issues/9393
+
+PLEASE DO NOT MERGE
+
+*/
+
+const HUMAN: &[u8] = include_bytes!("./res/contract_fractal_i-am-human_near.wasm");
+const INPUT: &str = r#"{
+    "claim_b64": "QAAAADY0ODQ0MjVlYmJjZDc5NDBjNDg3NGI3NDQzYjMxMmQzODZhOWMzNTBiYmJmNDBlN2VmZTBlNTYyZWQ5MjI0ZTggAAAAZmQ3ZGE3MDJjZjg4NGQyYzk2NzJkMjdkMTNlN2I1MDB418tkAAAAAAA=",
+    "claim_sig": "1BL4wcrynHCQWflgXZG7DFRFw/Lj+1ip6dkSgjjdo3mlYA868TLaGvZGLiOUGVWOA+mlC6RRS1YeyyO/doJ1Cg=="
+}"#;
+const STATE: &[u8] = include_bytes!("./res/human.bin");
+
+#[test]
+fn test_i_am_human_arithmetic_trap() {
+    near_o11y::testonly::init_test_logger();
+
+    test_builder()
+        .wasm(HUMAN)
+        .method("sbt_mint")
+        .signer("6484425ebbcd7940c4874b7443b312d386a9c350bbbf40e7efe0e562ed9224e8".parse().unwrap())
+        .gas(60 * 10u64.pow(12))
+        .deposit(8u128 * 10u128.pow(21))
+        .input(INPUT.as_bytes().to_vec())
+        .storage_value(b"STATE", STATE)
+
+        // near-vm gives this
+        .expect(expect![[r#"
+            VMOutcome: balance 8000000000000000000002 storage_usage 12 return data None burnt gas 712380595914 used gas 712380595914
+            Err: WebAssembly trap: An arithmetic exception, e.g. divided by zero.
+        "#]]);
+
+    // wasmer2 gives this
+    // .only_wasmer2()
+    // .expect(expect![[r#"
+    //     VMOutcome: balance 8000000000000000000002 storage_usage 12 return data None burnt gas 7543360465350 used gas 7543360465350
+    //     Err: Smart contract panicked: signature error: invalid signature
+    // "#]]);
+}

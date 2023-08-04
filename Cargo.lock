@@ -4433,6 +4433,7 @@ dependencies = [
  "loupe",
  "memoffset 0.8.0",
  "near-crypto",
+ "near-o11y",
  "near-primitives",
  "near-primitives-core",
  "near-stdx",

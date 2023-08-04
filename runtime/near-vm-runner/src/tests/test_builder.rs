@@ -1,6 +1,7 @@
 use crate::internal::VMKind;
 use crate::logic::{mocks::mock_external::MockedExternal, ProtocolVersion, VMContext, VMOutcome};
 use near_primitives::runtime::{config_store::RuntimeConfigStore, fees::RuntimeFeesConfig};
+use near_primitives_core::types::{AccountId, Balance};
 use near_primitives_core::{
     contract::ContractCode,
     types::Gas,
@@ -35,6 +36,7 @@ pub(crate) fn test_builder() -> TestBuilder {
         skip: HashSet::new(),
         opaque_error: false,
         opaque_outcome: false,
+        fake_external: MockedExternal::new(),
     }
 }
 
@@ -46,6 +48,7 @@ pub(crate) struct TestBuilder {
     skip: HashSet<VMKind>,
     opaque_error: bool,
     opaque_outcome: bool,
+    fake_external: MockedExternal,
 }
 
 impl TestBuilder {
@@ -71,8 +74,29 @@ impl TestBuilder {
         self
     }
 
+    pub(crate) fn input(mut self, arg: Vec<u8>) -> Self {
+        self.context.input = arg;
+        self
+    }
+
+    pub(crate) fn storage_value(mut self, key: &[u8], value: &[u8]) -> Self {
+        use crate::logic::External;
+        self.fake_external.storage_set(key, value).unwrap();
+        self
+    }
+
+    pub(crate) fn signer(mut self, signer: AccountId) -> Self {
+        self.context.signer_account_id = signer;
+        self
+    }
+
     pub(crate) fn gas(mut self, gas: Gas) -> Self {
         self.context.prepaid_gas = gas;
+        self
+    }
+
+    pub(crate) fn deposit(mut self, balance: Balance) -> Self {
+        self.context.attached_deposit = balance;
         self
     }
 
@@ -193,7 +217,7 @@ impl TestBuilder {
                     continue;
                 }
 
-                let mut fake_external = MockedExternal::new();
+                let mut fake_external = self.fake_external.clone();
                 let config = runtime_config.wasm_config.clone();
                 let fees = RuntimeFeesConfig::test();
                 let context = self.context.clone();
