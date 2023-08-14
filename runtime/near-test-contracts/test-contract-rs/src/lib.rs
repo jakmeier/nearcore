@@ -1244,3 +1244,58 @@ pub unsafe fn sanity_check_panic_utf8() {
     let data = b"xyz";
     panic_utf8(data.len() as u64, data.as_ptr() as u64);
 }
+
+// const MAX_LENGTH_RETURNED_DATA: u64 = 4_194_304;
+// the max above is a bad number, we cant even fit 2
+const LENGTH_RETURNED_DATA: u64 = 3_194_304;
+// const MAX_NUMBER_INPUT_DATA_DEPENDENCIES: usize = 128;
+// with large receipts, we quickly run out of gas, so we use less then max
+const NUMBER_INPUT_DATA_DEPENDENCIES: usize = 2;
+
+/// Creates a promise that depends on `NUMBER_INPUT_DATA_DEPENDENCIES` calls.
+#[no_mangle]
+pub unsafe fn depend_a_lot() {
+    // prepare the arguments for an async `self.big_dependency()` call
+    let my_account_register = 0;
+    let other_account_register = 1;
+    current_account_id(my_account_register);
+    predecessor_account_id(other_account_register);
+    let method = "big_dependency";
+    let amount_zero = 0u128;
+    let account_id_len: u64 = u64::MAX; // we read from register
+    let account_id_ptr: u64 = my_account_register;
+    let method_name_len: u64 = method.len() as u64;
+    let method_name_ptr: u64 = method.as_ptr() as u64;
+    let arguments_len: u64 = 0; // no args
+    let arguments_ptr: u64 = 0; // ptr shouldn't matter if len is 0
+    let amount_ptr: u64 = &amount_zero as *const u128 as *const u64 as u64;
+    let gas: u64 = 280 * 10u64.pow(12);
+
+    // spawn the same call many times and collect receipts ids
+    // let promise_indices: Vec<_> = std::iter::repeat_with(|| {
+    let promise_indices: Vec<_> = std::iter::repeat(promise_create(
+        account_id_len,
+        account_id_ptr,
+        method_name_len,
+        method_name_ptr,
+        arguments_len,
+        arguments_ptr,
+        amount_ptr,
+        gas,
+    ))
+    .take(NUMBER_INPUT_DATA_DEPENDENCIES)
+    .collect();
+
+    let joined = promise_and(promise_indices.as_ptr() as u64, promise_indices.len() as u64);
+
+    // use a constant account to target for all incoming data
+    let target_account = "node2";
+    promise_batch_then(joined, target_account.len() as u64, target_account.as_ptr() as u64);
+}
+
+/// Returns a `LENGTH_RETURNED_DATA` sized value that can be used in promises
+#[no_mangle]
+pub unsafe fn big_dependency() {
+    // simply return the first 4MiB of WASM memory, the content really doesn't matter
+    value_return(LENGTH_RETURNED_DATA, 0);
+}
