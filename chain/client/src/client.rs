@@ -1331,6 +1331,7 @@ impl Client {
         shard_chunk: Option<ShardChunk>,
         apply_chunks_done_callback: DoneApplyChunkCallback,
     ) {
+        let _t = near_chain::chain::PrintTimeOnDrop::new("on_chunk_completed");
         let chunk_header = partial_chunk.cloned_header();
         self.chain.blocks_delay_tracker.mark_chunk_completed(&chunk_header, StaticClock::utc());
         self.block_production_info
@@ -1359,8 +1360,11 @@ impl Client {
 
         // We're marking chunk as accepted.
         self.chain.blocks_with_missing_chunks.accept_chunk(&chunk_header.chunk_hash());
-        // If this was the last chunk that was missing for a block, it will be processed now.
-        self.process_blocks_with_missing_chunks(apply_chunks_done_callback)
+        {
+            let _t = near_chain::chain::PrintTimeOnDrop::new("on_chunk_completed process_blocks_with_missing_chunks");
+            // If this was the last chunk that was missing for a block, it will be processed now.
+            self.process_blocks_with_missing_chunks(apply_chunks_done_callback)
+        }
     }
 
     /// Called asynchronously when the ShardsManager finishes processing a chunk but the chunk

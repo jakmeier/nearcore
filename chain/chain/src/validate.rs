@@ -140,6 +140,7 @@ pub fn validate_chunk_with_chunk_extra(
         return Err(Error::InvalidBalanceBurnt);
     }
 
+    // BAD: Reading many MBs from DB
     let outgoing_receipts = chain_store.get_outgoing_receipts_for_shard(
         epoch_manager,
         *prev_block_hash,

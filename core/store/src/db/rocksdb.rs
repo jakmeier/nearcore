@@ -154,6 +154,10 @@ impl RocksDB {
             env.set_background_threads(0);
             println!("Disabled all background threads in rocksdb");
         }
+        else {
+            let mut env = Env::new().unwrap();
+            env.set_background_threads(16);
+        }
         Ok((db, options))
     }
 
@@ -508,7 +512,7 @@ fn rocksdb_column_options(col: DBCol, store_config: &StoreConfig, temp: Temperat
     // the rest use LZ4 compression.
     // See the implementation here:
     //      https://github.com/facebook/rocksdb/blob/c18c4a081c74251798ad2a1abf83bad417518481/options/options.cc#L588.
-    let memtable_memory_budget = 128 * bytesize::MIB as usize;
+    let memtable_memory_budget = 1024 * bytesize::MIB as usize;
     opts.optimize_level_style_compaction(memtable_memory_budget);
 
     opts.set_target_file_size_base(64 * bytesize::MIB);

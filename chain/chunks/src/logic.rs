@@ -221,11 +221,15 @@ pub fn persist_chunk(
     store: &mut ChainStore,
     blocking_io_actor: actix::Addr<BlockingIoActor>,
 ) -> Result<(), Error> {
+    let _t = near_chain::chain::PrintTimeOnDrop::new("persist_chunk");
+    
     let mut update = store.store_update();
     update.save_partial_chunk(partial_chunk);
     if let Some(shard_chunk) = shard_chunk {
+        let _t = near_chain::chain::PrintTimeOnDrop::new("persist_chunk save_chunk");
         update.save_chunk(shard_chunk);
     }
+    let _t = near_chain::chain::PrintTimeOnDrop::new("persist_chunk commit");
     update.commit_async(blocking_io_actor)?;
     // update.commit()?;
     Ok(())

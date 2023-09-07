@@ -597,15 +597,19 @@ impl StoreUpdate {
             self
         );
         let _span = tracing::trace_span!(target: "store", "commit").entered();
+        let mut sum = 0;
         for op in &self.transaction.ops {
             match op {
                 DBOp::Insert { col, key, value } => {
+                    sum += value.len();
                     tracing::trace!(target: "store", db_op = "insert", col = %col, key = %StorageKey(key), size = value.len(), value = %AbbrBytes(value),)
                 }
                 DBOp::Set { col, key, value } => {
+                    sum += value.len();
                     tracing::trace!(target: "store", db_op = "set", col = %col, key = %StorageKey(key), size = value.len(), value = %AbbrBytes(value))
                 }
                 DBOp::UpdateRefcount { col, key, value } => {
+                    sum += value.len();
                     tracing::trace!(target: "store", db_op = "update_rc", col = %col, key = %StorageKey(key), size = value.len(), value = %AbbrBytes(value))
                 }
                 DBOp::Delete { col, key } => {
@@ -619,6 +623,7 @@ impl StoreUpdate {
                 }
             }
         }
+        tracing::warn!(target: "store", "committing {} ops with total {} bytes", self.transaction.ops.len(), sum);
         self.storage.write(self.transaction)
     }
 }

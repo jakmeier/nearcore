@@ -3272,6 +3272,7 @@ impl<'a> ChainStoreUpdate<'a> {
     }
 
     pub fn commit(mut self) -> Result<(), Error> {
+        let _t = PrintTimeOnDrop::new("finalize + commit");
         let store_update = self.finalize()?;
         store_update.commit()?;
         self.update_caches()
@@ -3913,6 +3914,26 @@ mod tests {
             assert_eq!(store_update.tail().unwrap(), 2);
             assert_eq!(store_update.fork_tail().unwrap(), 3);
             assert_eq!(store_update.chunk_tail().unwrap(), 0);
+        }
+    }
+}
+
+pub struct PrintTimeOnDrop {
+    msg: &'static str,
+    start: std::time::Instant,
+}
+
+impl PrintTimeOnDrop {
+    pub fn new(msg: &'static str) -> Self {
+        Self { msg, start: std::time::Instant::now() }
+    }
+}
+
+impl Drop for PrintTimeOnDrop {
+    fn drop(&mut self) {
+        let elapsed = self.start.elapsed();
+        if elapsed.as_micros() > 1 {
+            tracing::log::warn!(target: "chain", " {} took: {:?}.\n", self.msg, elapsed)
         }
     }
 }

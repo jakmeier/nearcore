@@ -128,6 +128,26 @@ pub const TX_ROUTING_HEIGHT_HORIZON: BlockHeightDelta = 4;
 /// Private constant for 1 NEAR (copy from near/config.rs) used for reporting.
 const NEAR_BASE: Balance = 1_000_000_000_000_000_000_000_000;
 
+pub struct PrintTimeOnDrop {
+    msg: &'static str,
+    start: std::time::Instant,
+}
+
+impl PrintTimeOnDrop {
+    pub fn new(msg: &'static str) -> Self {
+        Self { msg, start: std::time::Instant::now() }
+    }
+}
+
+impl Drop for PrintTimeOnDrop {
+    fn drop(&mut self) {
+        let elapsed = self.start.elapsed();
+        if elapsed.as_micros() > 1 {
+            warn!(target: "chain", " {} took: {:?}.\n", self.msg, elapsed)
+        }
+    }
+}
+
 /// apply_chunks may be called in two code paths, through process_block or through catchup_blocks
 /// When it is called through process_block, it is possible that the shard state for the next epoch
 /// has not been caught up yet, thus the two modes IsCaughtUp and NotCaughtUp.
@@ -2070,6 +2090,8 @@ impl Chain {
         apply_chunks_done_callback: DoneApplyChunkCallback,
         block_received_time: Instant,
     ) -> Result<(), Error> {
+        let _t = PrintTimeOnDrop::new("start_process_block_impl");
+
         let block_height = block.header().height();
         let _span = tracing::debug_span!(
             target: "chain",
@@ -2401,6 +2423,7 @@ impl Chain {
         block_received_time: Instant,
         state_patch: SandboxStatePatch,
     ) -> Result<PreprocessBlockResult, Error> {
+        let t = PrintTimeOnDrop::new("preprocess_block");
         let header = block.header();
 
         // see if the block is already in processing or if there are too many blocks being processed
@@ -2562,6 +2585,7 @@ impl Chain {
                 apply_chunks_done: Arc::new(OnceCell::new()),
                 block_start_processing_time: block_received_time,
                 need_state_snapshot,
+                t: PrintTimeOnDrop::new("Block in processing"),
             },
         ))
     }
@@ -5019,6 +5043,7 @@ impl<'a> ChainUpdate<'a> {
         apply_results: Vec<ApplyChunkResult>,
     ) -> Result<(), Error> {
         let _span = tracing::debug_span!(target: "chain", "apply_chunk_postprocessing").entered();
+        let t = PrintTimeOnDrop::new("apply_chunk_postprocessing");
         for result in apply_results {
             self.process_apply_chunk_result(block, result)?
         }
@@ -5039,6 +5064,7 @@ impl<'a> ChainUpdate<'a> {
         apply_result: &ApplyTransactionResult,
         split_state_roots: Option<HashMap<ShardUId, StateRoot>>,
     ) -> Result<ApplySplitStateResultOrStateChanges, Error> {
+        let t = PrintTimeOnDrop::new("apply_split_state_changes");
         let state_changes = StateChangesForSplitStates::from_raw_state_changes(
             apply_result.trie_changes.state_changes(),
             apply_result.processed_delayed_receipts.clone(),
