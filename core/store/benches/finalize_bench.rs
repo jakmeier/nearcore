@@ -43,6 +43,8 @@ fn benchmark_write_shard_chunk(bench: &mut Bencher) {
     let chunk_hash: ChunkHash = CryptoHash::default().into();
     let chunk = create_shard_chunk(&chunk_hash, transactions, receipts);
 
+    println!("chunk: {chunk:?}");
+
     let chunks = spread_in_memory(chunk);
 
     let store = near_store::test_utils::create_test_store();
@@ -64,8 +66,10 @@ fn benchmark_write_partial_encoded_chunk(bench: &mut Bencher) {
     let chunk_hash: ChunkHash = CryptoHash::default().into();
 
     let (encoded_chunk, merkle_paths) = create_encoded_shard_chunk(transactions, &receipts);
+    println!("encoded_chunk: {encoded_chunk:?}");
     let partial_chunk =
         encoded_chunk_to_partial_encoded_chunk(encoded_chunk, receipts, merkle_paths);
+    println!("partial_chunk: {partial_chunk:?}");
     let chunks = spread_in_memory(partial_chunk);
 
     let store = near_store::test_utils::create_test_store();
