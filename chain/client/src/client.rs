@@ -215,6 +215,10 @@ impl Client {
         rng_seed: RngSeed,
         make_state_snapshot_callback: Option<MakeSnapshotCallback>,
     ) -> Result<Self, Error> {
+        // TODO: How to set this number? How does it relate to other io threads?
+        let todo_io_threads = 4;
+        let blocking_io_actor = SyncArbiter::start(todo_io_threads, || BlockingIoActor);
+
         let doomslug_threshold_mode = if enable_doomslug {
             DoomslugThresholdMode::TwoThirds
         } else {
@@ -233,6 +237,7 @@ impl Client {
             doomslug_threshold_mode,
             chain_config.clone(),
             make_state_snapshot_callback,
+            Some(blocking_io_actor.clone()),
         )?;
         // Create flat storage or initiate migration to flat storage.
         let flat_storage_creator = FlatStorageCreator::new(
@@ -1364,6 +1369,9 @@ impl Client {
         // We're marking chunk as accepted.
         self.chain.blocks_with_missing_chunks.accept_chunk(&chunk_header.chunk_hash());
         {
+            let _t = near_chain::chain::PrintTimeOnDrop::new(
+                "on_chunk_completed process_blocks_with_missing_chunks",
+            );
             // If this was the last chunk that was missing for a block, it will be processed now.
             self.process_blocks_with_missing_chunks(apply_chunks_done_callback)
         }

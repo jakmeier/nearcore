@@ -153,8 +153,7 @@ impl RocksDB {
             env.set_low_priority_background_threads(0);
             env.set_background_threads(0);
             println!("Disabled all background threads in rocksdb");
-        }
-        else {
+        } else {
             let mut env = Env::new().unwrap();
             env.set_background_threads(16);
         }

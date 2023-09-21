@@ -1,6 +1,8 @@
 use near_o11y::WithSpanContext;
 use near_store::StoreUpdate;
 
+use near_performance_metrics_macros::perf;
+
 /// Runs IO tasks that would block a normal arbiter for too long.
 ///
 /// This actor should be running in a SyncArbiter, which means there can be
@@ -23,11 +25,14 @@ impl actix::Actor for BlockingIoActor {
 impl actix::Handler<WithSpanContext<BlockingIoActorMessage>> for BlockingIoActor {
     type Result = std::io::Result<()>;
 
+    #[perf]
     fn handle(
         &mut self,
         msg: WithSpanContext<BlockingIoActorMessage>,
         _ctx: &mut Self::Context,
     ) -> Self::Result {
+        let _t = crate::chain::PrintTimeOnDrop::new("BlockingIoActor commit");
+
         // For now there is only one message type.
         let BlockingIoActorMessage::CommitStoreUpdate(update) = msg.msg;
         let _span = tracing::debug_span!(target: "client", "commit_store_update");

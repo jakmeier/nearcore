@@ -1232,8 +1232,11 @@ impl ClientActor {
         chain_store_update
             .save_largest_target_height(self.client.doomslug.get_largest_target_height());
 
-        match chain_store_update.commit() {
-                    Ok(_) => {
+        let addr = self.client.blocking_io_actor.clone();
+        // match chain_store_update.commit() {
+        match chain_store_update.commit_async(addr) {
+            // this commit can take seconds! TODO: Try async commit?
+            Ok(_) => {
                 let head = unwrap_or_return!(self.client.chain.head());
                 if self.client.is_validator(&head.epoch_id, &head.last_block_hash)
                     || self.client.is_validator(&head.next_epoch_id, &head.last_block_hash)

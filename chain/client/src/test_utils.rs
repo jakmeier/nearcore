@@ -244,6 +244,7 @@ pub fn setup(
             state_snapshot_every_n_blocks: None,
         },
         None,
+        None,
     )
     .unwrap();
     let genesis_block = chain.get_block(&chain.genesis().hash().clone()).unwrap();
@@ -365,6 +366,7 @@ pub fn setup_only_view(
             background_migration_threads: 1,
             state_snapshot_every_n_blocks: None,
         },
+        None,
         None,
     )
     .unwrap();
@@ -807,7 +809,7 @@ pub fn setup_mock_all_validators(
                                 drop_chunks,
                                 |c| {
                                     c.send(
-                                        ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest { 
+                                        ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest {
                                             partial_encoded_chunk_request: request.clone(),
                                             route_back: my_address
                                         }.with_span_context()
@@ -1251,6 +1253,7 @@ pub fn setup_synchronous_shards_manager(
             background_migration_threads: 1,
             state_snapshot_every_n_blocks: None,
         }, // irrelevant
+        None,
         None,
     )
     .unwrap();
@@ -1957,7 +1960,8 @@ impl TestEnv {
                     ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkResponse {
                         partial_encoded_chunk_response: response,
                         received_time: Instant::now(),
-                    }.with_span_context(),
+                    }
+                    .with_span_context(),
                 );
             }
         } else {
@@ -1974,7 +1978,8 @@ impl TestEnv {
             ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest {
                 partial_encoded_chunk_request: request.clone(),
                 route_back: CryptoHash::default(),
-            }.with_span_context(),
+            }
+            .with_span_context(),
         );
         let response = self.network_adapters[id].pop_most_recent();
         match response {
