@@ -846,9 +846,34 @@ impl ShardChunk {
     }
 }
 
-#[derive(Default, BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq)]
 pub struct EncodedShardChunkBody {
     pub parts: Vec<Option<Box<[u8]>>>,
+}
+
+impl std::fmt::Debug for EncodedShardChunkBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncodedShardChunkBody")
+            .field(
+                "parts",
+                &format_args!(
+                    "{:?}",
+                    self.parts
+                        .iter()
+                        .map(|maybe_part| if let Some(part) = maybe_part {
+                            format!("{:?}", AbbrBytes(part.as_ref()))
+                        } else {
+                            "None".to_owned()
+                        })
+                        .reduce(|mut a, b| {
+                            a.push_str(", ");
+                            a.push_str(&b);
+                            a
+                        })
+                ),
+            )
+            .finish()
+    }
 }
 
 impl EncodedShardChunkBody {

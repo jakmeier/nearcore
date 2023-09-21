@@ -2,6 +2,7 @@ pub mod delegate;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_crypto::PublicKey;
+use near_fmt::AbbrBytes;
 use near_primitives_core::{
     account::AccessKey,
     serialize::dec_format,
@@ -111,7 +112,7 @@ impl fmt::Debug for FunctionCallAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FunctionCallAction")
             .field("method_name", &format_args!("{}", &self.method_name))
-            .field("args", &format_args!("{}", base64(&self.args)))
+            .field("args", &format_args!("{}", AbbrBytes(&self.args)))
             .field("gas", &format_args!("{}", &self.gas))
             .field("deposit", &format_args!("{}", &self.deposit))
             .finish()
