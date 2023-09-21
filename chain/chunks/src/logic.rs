@@ -205,6 +205,15 @@ fn create_partial_chunk(
         receipts,
     };
 
+    let total = encoded_chunk.encoded_length();
+    let ps: Vec<_> = partial_chunk.parts.iter().map(|part| part.part.len() as u64).collect();
+    if ps.iter().sum::<u64>() != total {
+        error!(target: "chain", "PartialEncodedChunkV2 with encoded length {total}");
+        for l in ps {
+            error!(target: "chain", "PartialEncodedChunkPart with length {l}");
+        }
+    }
+
     Ok(make_partial_encoded_chunk_from_owned_parts_and_needed_receipts(
         &partial_chunk.header,
         partial_chunk.parts.iter(),
@@ -222,7 +231,7 @@ pub fn persist_chunk(
     blocking_io_actor: actix::Addr<BlockingIoActor>,
 ) -> Result<(), Error> {
     let _t = near_chain::chain::PrintTimeOnDrop::new("persist_chunk");
-    
+
     let mut update = store.store_update();
     update.save_partial_chunk(partial_chunk);
     if let Some(shard_chunk) = shard_chunk {

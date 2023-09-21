@@ -192,6 +192,9 @@ where
                     metrics::MessageDropped::InputTooLong.inc_unknown_msg();
                 } else {
                     writer.write_u32_le(msg.len() as u32).await?;
+                    // TODO(jakmeier): Well... looks like Frame(msg) owns the data and then we pass it own borrowed... There's gotta be a better option.
+                    // One thing to try: Instead of Vec<u8>, for example use iobuf::BufSpan with a pool of buffers backing it
+                    // Extra points if I can make it work together with Borsh deser/ser and never copy around big blobs like chunk->`part` or fn_call->`arg`
                     writer.write_all(&msg[..]).await?;
                 }
                 stats.messages_to_send.fetch_sub(1, Ordering::Release);

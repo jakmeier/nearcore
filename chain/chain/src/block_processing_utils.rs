@@ -32,7 +32,7 @@ pub(crate) struct BlockPreprocessInfo {
     /// Whether needs to create a state snapshot after processing this block.
     pub(crate) need_state_snapshot: bool,
 
-    pub(crate) t: super::chain::PrintTimeOnDrop,
+    pub(crate) _t: super::chain::PrintTimeOnDrop,
 }
 
 /// Blocks which finished pre-processing and are now being applied asynchronously

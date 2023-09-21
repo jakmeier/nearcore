@@ -1621,6 +1621,7 @@ impl ShardsManager {
                 protocol_version,
             );
 
+            let total = encoded_chunk.encoded_length();
             for (part_ord, part_entry) in entry.parts.iter() {
                 encoded_chunk.content_mut().parts[*part_ord as usize] =
                     Some(part_entry.part.clone());
@@ -1629,6 +1630,15 @@ impl ShardsManager {
             let (shard_chunk, partial_chunk) = self
                 .decode_encoded_chunk_if_complete(encoded_chunk)?
                 .expect("decoding shouldn't fail");
+
+            let ps: Vec<_> =
+                partial_chunk.parts().iter().map(|part| part.part.len() as u64).collect();
+            if ps.iter().sum::<u64>() != total {
+                error!(target: "chunks", "try_process_chunk_parts_and_receipts PartialEncodedChunkV2 with encoded length {total}");
+                for l in ps {
+                    error!(target: "chunks", "try_process_chunk_parts_and_receipts PartialEncodedChunkPart with length {l}");
+                }
+            }
 
             // For consistency, only persist shard_chunk if we actually care about the shard.
             // Don't persist if we don't care about the shard, even if we accidentally got enough
