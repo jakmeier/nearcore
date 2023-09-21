@@ -58,7 +58,7 @@ use near_network::types::{
     NetworkInfo, PeerManagerMessageRequest, PeerManagerMessageResponse, SetChainInfo,
 };
 use near_o11y::testonly::TracingCapture;
-use near_o11y::WithSpanContextExt;
+use near_o11y::{WithSpanContext, WithSpanContextExt};
 use near_primitives::action::delegate::{DelegateAction, NonDelegateAction, SignedDelegateAction};
 use near_primitives::block::{ApprovalInner, Block, GenesisId};
 use near_primitives::epoch_manager::RngSeed;
@@ -806,7 +806,12 @@ pub fn setup_mock_all_validators(
                                 target.account_id.as_ref().map(|s| s.clone()),
                                 drop_chunks,
                                 |c| {
-                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest { partial_encoded_chunk_request: request.clone(), route_back: my_address });
+                                    c.send(
+                                        ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest { 
+                                            partial_encoded_chunk_request: request.clone(),
+                                            route_back: my_address
+                                        }.with_span_context()
+                                    );
                                 },
                             );
                         }
@@ -817,7 +822,7 @@ pub fn setup_mock_all_validators(
                                 route_back,
                                 drop_chunks,
                                 |c| {
-                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkResponse { partial_encoded_chunk_response: response.clone(), received_time: Instant::now() });
+                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkResponse { partial_encoded_chunk_response: response.clone(), received_time: Instant::now() }.with_span_context());
                                 },
                             );
                         }
@@ -831,7 +836,7 @@ pub fn setup_mock_all_validators(
                                 account_id.clone(),
                                 drop_chunks,
                                 |c| {
-                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunk(partial_encoded_chunk.clone().into()));
+                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunk(partial_encoded_chunk.clone().into()).with_span_context());
                                 },
                             );
                         }
@@ -842,7 +847,7 @@ pub fn setup_mock_all_validators(
                                 account_id.clone(),
                                 drop_chunks,
                                 |c| {
-                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkForward(forward.clone()));
+                                    c.send(ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkForward(forward.clone()).with_span_context());
                                 }
                             );
                         }
@@ -1176,7 +1181,7 @@ pub fn setup_client_with_runtime(
         shard_tracker,
         runtime,
         network_adapter,
-        shards_manager_adapter.client,
+        shards_manager_adapter.client.into(),
         validator_signer,
         enable_doomslug,
         rng_seed,
@@ -1311,12 +1316,14 @@ pub fn setup_client_with_synchronous_shards_manager(
 /// A combined trait bound for both the client side and network side of the ShardsManager API.
 #[derive(Clone, derive_more::AsRef)]
 pub struct ShardsManagerAdapterForTest {
-    pub client: Sender<ShardsManagerRequestFromClient>,
-    pub network: Sender<ShardsManagerRequestFromNetwork>,
+    pub client: Sender<WithSpanContext<ShardsManagerRequestFromClient>>,
+    pub network: Sender<WithSpanContext<ShardsManagerRequestFromNetwork>>,
 }
 
-impl<A: CanSend<ShardsManagerRequestFromClient> + CanSend<ShardsManagerRequestFromNetwork>>
-    From<Arc<A>> for ShardsManagerAdapterForTest
+impl<
+        A: CanSend<WithSpanContext<ShardsManagerRequestFromClient>>
+            + CanSend<WithSpanContext<ShardsManagerRequestFromNetwork>>,
+    > From<Arc<A>> for ShardsManagerAdapterForTest
 {
     fn from(arc: Arc<A>) -> Self {
         Self { client: arc.as_sender(), network: arc.as_sender() }
@@ -1905,7 +1912,7 @@ impl TestEnv {
                                 ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunk(
                                     partial_encoded_chunk,
                                 );
-                            self.shards_manager(&account_id).send(message);
+                            self.shards_manager(&account_id).send(message.with_span_context());
                         }
                         PeerManagerMessageRequest::NetworkRequests(
                             NetworkRequests::PartialEncodedChunkForward { account_id, forward },
@@ -1914,7 +1921,7 @@ impl TestEnv {
                                 ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkForward(
                                     forward,
                                 );
-                            self.shards_manager(&account_id).send(message);
+                            self.shards_manager(&account_id).send(message.with_span_context());
                         }
                         _ => {
                             tracing::debug!(target: "test", ?request, "skipping unsupported request type");
@@ -1950,7 +1957,7 @@ impl TestEnv {
                     ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkResponse {
                         partial_encoded_chunk_response: response,
                         received_time: Instant::now(),
-                    },
+                    }.with_span_context(),
                 );
             }
         } else {
@@ -1967,7 +1974,7 @@ impl TestEnv {
             ShardsManagerRequestFromNetwork::ProcessPartialEncodedChunkRequest {
                 partial_encoded_chunk_request: request.clone(),
                 route_back: CryptoHash::default(),
-            },
+            }.with_span_context(),
         );
         let response = self.network_adapters[id].pop_most_recent();
         match response {

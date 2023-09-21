@@ -16,7 +16,7 @@ use crate::info::{display_sync_status, InfoHelper};
 use crate::sync::state::{StateSync, StateSyncResult};
 use crate::sync_jobs_actor::{create_sync_job_scheduler, SyncJobsActor};
 use crate::{metrics, StatusResponse};
-use actix::{Actor, Addr, Arbiter, AsyncContext, Context, Handler, SyncArbiter};
+use actix::{Actor, Addr, Arbiter, AsyncContext, Context, Handler};
 use actix_rt::ArbiterHandle;
 use chrono::{DateTime, Utc};
 use near_async::messaging::{CanSend, Sender};
@@ -1233,7 +1233,7 @@ impl ClientActor {
             .save_largest_target_height(self.client.doomslug.get_largest_target_height());
 
         match chain_store_update.commit() {
-            Ok(_) => {
+                    Ok(_) => {
                 let head = unwrap_or_return!(self.client.chain.head());
                 if self.client.is_validator(&head.epoch_id, &head.last_block_hash)
                     || self.client.is_validator(&head.next_epoch_id, &head.last_block_hash)
@@ -1872,7 +1872,7 @@ pub fn start_client(
     runtime: Arc<dyn RuntimeAdapter>,
     node_id: PeerId,
     network_adapter: PeerManagerAdapter,
-    shards_manager_adapter: Sender<ShardsManagerRequestFromClient>,
+    shards_manager_adapter: Sender<WithSpanContext<ShardsManagerRequestFromClient>>,
     validator_signer: Option<Arc<dyn ValidatorSigner>>,
     telemetry_actor: Addr<TelemetryActor>,
     make_state_snapshot_callback: Option<MakeSnapshotCallback>,

@@ -47,6 +47,8 @@ use near_network::types::{
     HighestHeightPeerInfo, NetworkRequests, PeerManagerAdapter, ReasonForBan,
 };
 use near_o11y::log_assert;
+use near_o11y::WithSpanContext;
+use near_o11y::WithSpanContextExt;
 use near_pool::InsertTransactionResult;
 use near_primitives::block::{Approval, ApprovalInner, ApprovalMessage, Block, BlockHeader, Tip};
 use near_primitives::block_header::ApprovalType;
@@ -117,7 +119,7 @@ pub struct Client {
     pub epoch_manager: Arc<dyn EpochManagerAdapter>,
     pub shard_tracker: ShardTracker,
     pub runtime_adapter: Arc<dyn RuntimeAdapter>,
-    pub shards_manager_adapter: Sender<ShardsManagerRequestFromClient>,
+    pub shards_manager_adapter: Sender<WithSpanContext<ShardsManagerRequestFromClient>>,
     pub sharded_tx_pool: ShardedTransactionPool,
     prev_block_to_chunk_headers_ready_for_inclusion: LruCache<
         CryptoHash,
@@ -166,7 +168,7 @@ pub struct Client {
     flat_storage_creator: Option<FlatStorageCreator>,
 
     /// Actor address for IO operations that may block for a long time.
-    blocking_io_actor: actix::Addr<BlockingIoActor>,
+    pub blocking_io_actor: actix::Addr<BlockingIoActor>,
 }
 
 impl Client {
@@ -207,7 +209,7 @@ impl Client {
         shard_tracker: ShardTracker,
         runtime_adapter: Arc<dyn RuntimeAdapter>,
         network_adapter: PeerManagerAdapter,
-        shards_manager_adapter: Sender<ShardsManagerRequestFromClient>,
+        shards_manager_adapter: Sender<WithSpanContext<ShardsManagerRequestFromClient>>,
         validator_signer: Option<Arc<dyn ValidatorSigner>>,
         enable_doomslug: bool,
         rng_seed: RngSeed,
@@ -291,10 +293,6 @@ impl Client {
             validator_signer.clone(),
             doomslug_threshold_mode,
         );
-
-        // TODO: How to set this number? How does it relate to other io threads?
-        let todo_io_threads = 4;
-        let blocking_io_actor = SyncArbiter::start(todo_io_threads, || BlockingIoActor);
 
         Ok(Self {
             #[cfg(feature = "test_features")]
@@ -1235,10 +1233,13 @@ impl Client {
             apply_chunks_done_callback,
         );
         if accepted_blocks.iter().any(|accepted_block| accepted_block.status.is_new_head()) {
-            self.shards_manager_adapter.send(ShardsManagerRequestFromClient::UpdateChainHeads {
-                head: self.chain.head().unwrap(),
-                header_head: self.chain.header_head().unwrap(),
-            });
+            self.shards_manager_adapter.send(
+                ShardsManagerRequestFromClient::UpdateChainHeads {
+                    head: self.chain.head().unwrap(),
+                    header_head: self.chain.header_head().unwrap(),
+                }
+                .with_span_context(),
+            );
         }
         self.process_block_processing_artifact(block_processing_artifacts);
         let accepted_blocks_hashes =
@@ -1279,8 +1280,10 @@ impl Client {
             .flat_map(|block| block.missing_chunks.iter())
             .chain(orphans_missing_chunks.iter().flat_map(|block| block.missing_chunks.iter()));
         for chunk in missing_chunks {
-            self.shards_manager_adapter
-                .send(ShardsManagerRequestFromClient::ProcessChunkHeaderFromBlock(chunk.clone()));
+            self.shards_manager_adapter.send(
+                ShardsManagerRequestFromClient::ProcessChunkHeaderFromBlock(chunk.clone())
+                    .with_span_context(),
+            );
         }
         // Request any missing chunks (which may be completed by the
         // process_chunk_header_from_block call, but that is OK as it would be noop).
@@ -1361,7 +1364,6 @@ impl Client {
         // We're marking chunk as accepted.
         self.chain.blocks_with_missing_chunks.accept_chunk(&chunk_header.chunk_hash());
         {
-            let _t = near_chain::chain::PrintTimeOnDrop::new("on_chunk_completed process_blocks_with_missing_chunks");
             // If this was the last chunk that was missing for a block, it will be processed now.
             self.process_blocks_with_missing_chunks(apply_chunks_done_callback)
         }
@@ -1398,10 +1400,13 @@ impl Client {
         let mut challenges = vec![];
         self.chain.sync_block_headers(headers, &mut challenges)?;
         self.send_challenges(challenges);
-        self.shards_manager_adapter.send(ShardsManagerRequestFromClient::UpdateChainHeads {
-            head: self.chain.head().unwrap(),
-            header_head: self.chain.header_head().unwrap(),
-        });
+        self.shards_manager_adapter.send(
+            ShardsManagerRequestFromClient::UpdateChainHeads {
+                head: self.chain.head().unwrap(),
+                header_head: self.chain.header_head().unwrap(),
+            }
+            .with_span_context(),
+        );
         Ok(())
     }
 
@@ -1590,8 +1595,10 @@ impl Client {
             }
         }
 
-        self.shards_manager_adapter
-            .send(ShardsManagerRequestFromClient::CheckIncompleteChunks(*block.hash()));
+        self.shards_manager_adapter.send(
+            ShardsManagerRequestFromClient::CheckIncompleteChunks(*block.hash())
+                .with_span_context(),
+        );
     }
 
     /// Reconcile the transaction pool after processing a block.
@@ -1721,12 +1728,15 @@ impl Client {
             self.blocking_io_actor.clone(),
         )?;
         self.on_chunk_header_ready_for_inclusion(encoded_chunk.cloned_header(), validator_id);
-        self.shards_manager_adapter.send(ShardsManagerRequestFromClient::DistributeEncodedChunk {
-            partial_chunk,
-            encoded_chunk,
-            merkle_paths,
-            outgoing_receipts: receipts,
-        });
+        self.shards_manager_adapter.send(
+            ShardsManagerRequestFromClient::DistributeEncodedChunk {
+                partial_chunk,
+                encoded_chunk,
+                merkle_paths,
+                outgoing_receipts: receipts,
+            }
+            .with_span_context(),
+        );
         Ok(())
     }
 
@@ -1740,10 +1750,13 @@ impl Client {
             for chunk in &missing_chunks {
                 self.chain.blocks_delay_tracker.mark_chunk_requested(chunk, now);
             }
-            self.shards_manager_adapter.send(ShardsManagerRequestFromClient::RequestChunks {
-                chunks_to_request: missing_chunks,
-                prev_hash,
-            });
+            self.shards_manager_adapter.send(
+                ShardsManagerRequestFromClient::RequestChunks {
+                    chunks_to_request: missing_chunks,
+                    prev_hash,
+                }
+                .with_span_context(),
+            );
         }
 
         for OrphanMissingChunks { missing_chunks, epoch_id, ancestor_hash } in
@@ -1757,7 +1770,8 @@ impl Client {
                     chunks_to_request: missing_chunks,
                     epoch_id,
                     ancestor_hash,
-                },
+                }
+                .with_span_context(),
             );
         }
     }
