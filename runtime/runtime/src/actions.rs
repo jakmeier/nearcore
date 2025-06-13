@@ -9,7 +9,8 @@ use near_crypto::PublicKey;
 use near_parameters::{AccountCreationConfig, ActionCosts, RuntimeConfig, RuntimeFeesConfig};
 use near_primitives::account::{AccessKey, AccessKeyPermission, Account, AccountContract};
 use near_primitives::action::delegate::{DelegateAction, SignedDelegateAction};
-use near_primitives::action::{ContractContext, SwitchContextAction};
+use near_primitives::action::SwitchContextAction;
+use near_primitives_core::contract_context::ContractContext;
 use near_primitives::config::ViewConfig;
 use near_primitives::errors::{ActionError, ActionErrorKind, InvalidAccessKeyError, RuntimeError};
 use near_primitives::hash::CryptoHash;
@@ -1019,7 +1020,6 @@ pub(crate) fn check_actor_permissions(
                 (ContractContext::Root, ContractContext::Sharded { .. }) => todo!(),
                 (ContractContext::Sharded { .. }, ContractContext::Root) => todo!(),
                 (ContractContext::Sharded { .. }, ContractContext::Sharded { .. }) => todo!(),
-                _ => todo!(),
             }
         },
         Action::CreateAccount(_) | Action::FunctionCall(_) | Action::Transfer(_) => (),

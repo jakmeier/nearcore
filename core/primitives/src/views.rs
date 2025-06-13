@@ -6,9 +6,8 @@
 use crate::account::{AccessKey, AccessKeyPermission, Account, FunctionCallPermission};
 use crate::action::delegate::{DelegateAction, SignedDelegateAction};
 use crate::action::{
-    ContextPermission, ContractContext, DeployGlobalContractAction, GlobalContractDeployMode,
-    GlobalContractIdentifier, SetContextPermissionAction, SwitchContextAction,
-    UseGlobalContractAction,
+    DeployGlobalContractAction, GlobalContractDeployMode, GlobalContractIdentifier,
+    SetContextPermissionAction, SwitchContextAction, UseGlobalContractAction,
 };
 use crate::bandwidth_scheduler::BandwidthRequests;
 use crate::block::{Block, BlockHeader, Tip};
@@ -50,6 +49,7 @@ use near_parameters::config::CongestionControlConfig;
 use near_parameters::view::CongestionControlConfigView;
 use near_parameters::{ActionCosts, ExtCosts};
 use near_primitives_core::account::{AccountContract, GasKey};
+use near_primitives_core::contract_context::{ContextPermission, ContractContext};
 use near_primitives_core::types::NonceIndex;
 use near_schema_checker_lib::ProtocolSchema;
 use near_time::Utc;
@@ -2782,23 +2782,26 @@ impl CongestionInfoView {
     serde::Deserialize,
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
 pub enum ContractContextView {
     Root,
     ShardedByAccountId { account_id: AccountId },
-    ShardedByCodeHash { code_hash: CryptoHash },
+    // TODO(sharded_contract) decide on using code hashes for sharded contracts
+    // ShardedByCodeHash { code_hash: CryptoHash },
 }
 
 impl From<ContractContext> for ContractContextView {
     fn from(other: ContractContext) -> Self {
         match other {
             ContractContext::Root => ContractContextView::Root,
-            ContractContext::Sharded {
-                code_id: GlobalContractIdentifier::AccountId(account_id),
-            } => ContractContextView::ShardedByAccountId { account_id },
-            ContractContext::Sharded { code_id: GlobalContractIdentifier::CodeHash(code_hash) } => {
-                ContractContextView::ShardedByCodeHash { code_hash }
-            }
+            ContractContext::Sharded { account_id } => {
+                ContractContextView::ShardedByAccountId { account_id }
+            } // TODO(sharded_contract) decide on using code hashes for sharded contracts
+              // ContractContext::Sharded {
+              //     code_id: GlobalContractIdentifier::AccountId(account_id),
+              // } => ContractContextView::ShardedByAccountId { account_id },
+              // ContractContext::Sharded { code_id: GlobalContractIdentifier::CodeHash(code_hash) } => {
+              //     ContractContextView::ShardedByCodeHash { code_hash }
+              // }
         }
     }
 }
@@ -2807,12 +2810,15 @@ impl From<ContractContextView> for ContractContext {
     fn from(other: ContractContextView) -> Self {
         match other {
             ContractContextView::Root => ContractContext::Root,
-            ContractContextView::ShardedByAccountId { account_id } => ContractContext::Sharded {
-                code_id: GlobalContractIdentifier::AccountId(account_id),
-            },
-            ContractContextView::ShardedByCodeHash { code_hash } => {
-                ContractContext::Sharded { code_id: GlobalContractIdentifier::CodeHash(code_hash) }
-            }
+            ContractContextView::ShardedByAccountId { account_id } => {
+                ContractContext::Sharded { account_id }
+            } // TODO(sharded_contract) decide on using code hashes for sharded contracts
+              // ContractContextView::ShardedByAccountId { account_id } => ContractContext::Sharded {
+              //     code_id: GlobalContractIdentifier::AccountId(account_id),
+              // },
+              // ContractContextView::ShardedByCodeHash { code_hash } => {
+              //     ContractContext::Sharded { code_id: GlobalContractIdentifier::CodeHash(code_hash) }
+              // }
         }
     }
 }
@@ -2828,7 +2834,6 @@ impl From<ContractContextView> for ContractContext {
     serde::Deserialize,
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
 pub enum ContextPermissionView {
     FullAccess,
     Limited { reserved_balance: Balance },
