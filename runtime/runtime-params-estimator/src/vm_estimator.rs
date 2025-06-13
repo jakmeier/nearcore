@@ -4,6 +4,7 @@ use crate::{REAL_CONTRACTS_SAMPLE, utils::read_resource};
 use near_parameters::RuntimeConfigStore;
 use near_parameters::vm::VMKind;
 use near_primitives::version::PROTOCOL_VERSION;
+use near_primitives_core::contract_context::ContractContext;
 use near_vm_runner::internal::VMKindExt;
 use near_vm_runner::logic::VMContext;
 use near_vm_runner::{
@@ -18,9 +19,11 @@ const PREDECESSOR_ACCOUNT_ID: &str = "carol";
 pub(crate) fn create_context(input: Vec<u8>) -> VMContext {
     VMContext {
         current_account_id: CURRENT_ACCOUNT_ID.parse().unwrap(),
+        current_contract_context: ContractContext::Root,
         signer_account_id: SIGNER_ACCOUNT_ID.parse().unwrap(),
         signer_account_pk: Vec::from(&SIGNER_ACCOUNT_PK[..]),
         predecessor_account_id: PREDECESSOR_ACCOUNT_ID.parse().unwrap(),
+        predecessor_contract_context: ContractContext::Root,
         input,
         promise_results: vec![].into(),
         block_height: 10,

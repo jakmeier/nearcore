@@ -19,6 +19,7 @@ use near_parameters::{
     ActionCosts, ExtCosts, RuntimeFeesConfig, transfer_exec_fee, transfer_send_fee,
 };
 use near_primitives_core::config::INLINE_DISK_VALUE_THRESHOLD;
+use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::hash::CryptoHash;
 use near_primitives_core::types::{
     AccountId, Balance, Compute, EpochHeight, Gas, GasWeight, StorageUsage,
@@ -564,6 +565,52 @@ impl<'a> VMLogic<'a> {
         )
     }
 
+    /// Saves the current sharded contract context into the register.
+    ///
+    /// Returns a bool indicating success (1) or failure (0) as a `u64`.
+    ///
+    /// Success means the method was invoked from a sharded context and it has
+    /// been stored in the register.
+    ///
+    /// Failure means we are not running in a sharded context but instead in
+    /// root context or any other context added in the future. Nothing was
+    /// stored in the register in that case.
+    ///
+    /// # Errors
+    ///
+    /// If the registers exceed the memory limit returns `MemoryAccessViolation`.
+    ///
+    /// # Cost
+    ///
+    /// `base + write_register_base + write_register_byte * num_bytes`
+    pub fn current_sharded_context(&mut self, register_id: u64) -> Result<u64> {
+        self.result_state.gas_counter.pay_base(base)?;
+
+        self.read_sharded_context_into_register(&self.context.current_contract_context, register_id)
+    }
+
+    /// Saves the predecessor sharded contract context into the register.
+    ///
+    /// Returns a bool indicating success (1) or failure (0) as a `u64`.
+    fn read_sharded_context_into_register(
+        &mut self,
+        sharded_contract_context: &ContractContext,
+        register_id: u64,
+    ) -> Result<u64> {
+        match sharded_contract_context {
+            ContractContext::Root => Ok(0),
+            ContractContext::Sharded { account_id } => {
+                self.registers.set(
+                    &mut self.result_state.gas_counter,
+                    &self.config.limit_config,
+                    register_id,
+                    account_id.as_bytes(),
+                )?;
+                Ok(1)
+            }
+        }
+    }
+
     /// All contract calls are a result of some transaction that was signed by some account using
     /// some access key and submitted into a memory pool (either through the wallet using RPC or by
     /// a node itself). This function returns the id of that account. Saves the bytes of the signer
@@ -649,6 +696,33 @@ impl<'a> VMLogic<'a> {
             &self.config.limit_config,
             register_id,
             self.context.predecessor_account_id.as_bytes(),
+        )
+    }
+
+    /// Saves the predecessor sharded contract context into the register.
+    ///
+    /// Returns a bool indicating success (1) or failure (0) as a `u64`.
+    ///
+    /// Success means the method was invoked from a sharded context and it has
+    /// been stored in the register.
+    ///
+    /// Failure means we are not running in a sharded context but instead in
+    /// root context or any other context added in the future. Nothing was
+    /// stored in the register in that case.
+    ///
+    /// # Errors
+    ///
+    /// If the registers exceed the memory limit returns `MemoryAccessViolation`.
+    ///
+    /// # Cost
+    ///
+    /// `base + write_register_base + write_register_byte * num_bytes`
+    pub fn predecessor_sharded_context(&mut self, register_id: u64) -> Result<u64> {
+        self.result_state.gas_counter.pay_base(base)?;
+
+        self.read_sharded_context_into_register(
+            &self.context.predecessor_contract_context,
+            register_id,
         )
     }
 

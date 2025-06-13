@@ -1,5 +1,6 @@
 use super::types::{PromiseResult, PublicKey};
 use near_primitives_core::config::ViewConfig;
+use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::types::{
     AccountId, Balance, BlockHeight, EpochHeight, Gas, StorageUsage,
 };
@@ -9,6 +10,8 @@ use near_primitives_core::types::{
 pub struct VMContext {
     /// The account id of the current contract that we are executing.
     pub current_account_id: AccountId,
+    /// The contract context in which we are executing.
+    pub current_contract_context: ContractContext,
     /// The account id of that signed the original transaction that led to this
     /// execution.
     pub signer_account_id: AccountId,
@@ -20,6 +23,8 @@ pub struct VMContext {
     /// If this execution is the result of direct execution of transaction then it
     /// is equal to `signer_account_id`.
     pub predecessor_account_id: AccountId,
+    /// The contract context from which the predecessor made the call.
+    pub predecessor_contract_context: ContractContext,
     /// The input to the contract call.
     /// Encoded as base64 string to be able to pass input in borsh binary format.
     pub input: Vec<u8>,

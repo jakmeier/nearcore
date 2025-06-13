@@ -19,6 +19,7 @@ libfuzzer-sys.workspace = true
 
 near-parameters.workspace = true
 near-primitives.workspace = true
+near-primitives-core.workspace = true
 near-test-contracts.workspace = true
 near-vm-runner = { workspace = true, features = ["prepare"] }
 

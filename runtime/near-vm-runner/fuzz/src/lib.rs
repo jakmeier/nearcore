@@ -1,3 +1,4 @@
+use near_primitives_core::contract_context::ContractContext;
 use near_vm_runner::ContractCode;
 use near_vm_runner::internal::wasmparser::{Export, ExternalKind, Parser, Payload, TypeDef};
 use near_vm_runner::logic::VMContext;
@@ -32,9 +33,11 @@ pub fn find_entry_point(contract: &ContractCode) -> Option<String> {
 pub fn create_context(input: Vec<u8>) -> VMContext {
     VMContext {
         current_account_id: "alice".parse().unwrap(),
+        current_contract_context: ContractContext::Root,
         signer_account_id: "bob".parse().unwrap(),
         signer_account_pk: vec![0, 1, 2, 3, 4],
         predecessor_account_id: "carol".parse().unwrap(),
+        predecessor_contract_context: ContractContext::Root,
         input,
         promise_results: Vec::new().into(),
         block_height: 10,

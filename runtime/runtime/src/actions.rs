@@ -65,14 +65,21 @@ pub(crate) fn execute_function_call(
     } else {
         vec![]
     };
+
+    // TODO(sharded_contract): Read contract context from incoming actions
+    let current_contract_context= ContractContext::Root;
+    let predecessor_contract_context= ContractContext::Root;
+
     let random_seed =
         near_primitives::utils::create_random_seed(*action_hash, apply_state.random_seed);
     let context = VMContext {
         current_account_id: runtime_ext.account_id().clone(),
+        current_contract_context,
         signer_account_id: action_receipt.signer_id.clone(),
         signer_account_pk: borsh::to_vec(&action_receipt.signer_public_key)
             .expect("Failed to serialize"),
         predecessor_account_id: predecessor_id.clone(),
+        predecessor_contract_context,
         input: function_call.args.clone(),
         promise_results,
         block_height: apply_state.block_height,
