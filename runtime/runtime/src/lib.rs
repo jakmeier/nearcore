@@ -618,6 +618,9 @@ impl Runtime {
                     receipt.priority(),
                 )?;
             }
+            // TODO(sharded_contract): actually execute actions
+            Action::SetContextPermission(_set_context_permission_action) => todo!(),
+            Action::SwitchContext(_switch_context_action) => todo!(),
         };
         Ok(result)
     }

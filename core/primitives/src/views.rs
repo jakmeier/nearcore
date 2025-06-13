@@ -6,7 +6,8 @@
 use crate::account::{AccessKey, AccessKeyPermission, Account, FunctionCallPermission};
 use crate::action::delegate::{DelegateAction, SignedDelegateAction};
 use crate::action::{
-    DeployGlobalContractAction, GlobalContractDeployMode, GlobalContractIdentifier,
+    ContextPermission, ContractContext, DeployGlobalContractAction, GlobalContractDeployMode,
+    GlobalContractIdentifier, SetContextPermissionAction, SwitchContextAction,
     UseGlobalContractAction,
 };
 use crate::bandwidth_scheduler::BandwidthRequests;
@@ -1316,6 +1317,14 @@ pub enum ActionView {
     UseGlobalContractByAccountId {
         account_id: AccountId,
     },
+    SetContextPermission {
+        context: ContractContextView,
+        permission: ContextPermissionView,
+    },
+    SwitchContext {
+        caller: ContractContextView,
+        target: ContractContextView,
+    },
 }
 
 impl From<Action> for ActionView {
@@ -1364,6 +1373,14 @@ impl From<Action> for ActionView {
                 GlobalContractIdentifier::AccountId(account_id) => {
                     ActionView::UseGlobalContractByAccountId { account_id }
                 }
+            },
+            Action::SetContextPermission(action) => ActionView::SetContextPermission {
+                context: action.context.into(),
+                permission: action.permission.into(),
+            },
+            Action::SwitchContext(action) => ActionView::SwitchContext {
+                caller: action.caller.into(),
+                target: action.target.into(),
             },
         }
     }
@@ -1422,6 +1439,18 @@ impl TryFrom<ActionView> for Action {
             ActionView::UseGlobalContractByAccountId { account_id } => {
                 Action::UseGlobalContract(Box::new(UseGlobalContractAction {
                     contract_identifier: GlobalContractIdentifier::AccountId(account_id),
+                }))
+            }
+            ActionView::SetContextPermission { context, permission } => {
+                Action::SetContextPermission(Box::new(SetContextPermissionAction {
+                    context: context.into(),
+                    permission: permission.into(),
+                }))
+            }
+            ActionView::SwitchContext { caller, target } => {
+                Action::SwitchContext(Box::new(SwitchContextAction {
+                    caller: caller.into(),
+                    target: target.into(),
                 }))
             }
         })
@@ -2739,6 +2768,94 @@ impl CongestionInfoView {
         // misleading to call it congestion, as it is not a problem with too
         // much traffic.
         CongestionInfo::from(self.clone()).localized_congestion_level(&congestion_config)
+    }
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    BorshSerialize,
+    BorshDeserialize,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum ContractContextView {
+    Root,
+    ShardedByAccountId { account_id: AccountId },
+    ShardedByCodeHash { code_hash: CryptoHash },
+}
+
+impl From<ContractContext> for ContractContextView {
+    fn from(other: ContractContext) -> Self {
+        match other {
+            ContractContext::Root => ContractContextView::Root,
+            ContractContext::Sharded {
+                code_id: GlobalContractIdentifier::AccountId(account_id),
+            } => ContractContextView::ShardedByAccountId { account_id },
+            ContractContext::Sharded { code_id: GlobalContractIdentifier::CodeHash(code_hash) } => {
+                ContractContextView::ShardedByCodeHash { code_hash }
+            }
+        }
+    }
+}
+
+impl From<ContractContextView> for ContractContext {
+    fn from(other: ContractContextView) -> Self {
+        match other {
+            ContractContextView::Root => ContractContext::Root,
+            ContractContextView::ShardedByAccountId { account_id } => ContractContext::Sharded {
+                code_id: GlobalContractIdentifier::AccountId(account_id),
+            },
+            ContractContextView::ShardedByCodeHash { code_hash } => {
+                ContractContext::Sharded { code_id: GlobalContractIdentifier::CodeHash(code_hash) }
+            }
+        }
+    }
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    BorshSerialize,
+    BorshDeserialize,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum ContextPermissionView {
+    FullAccess,
+    Limited { reserved_balance: Balance },
+    Blocked,
+}
+
+impl From<ContextPermissionView> for ContextPermission {
+    fn from(other: ContextPermissionView) -> Self {
+        match other {
+            ContextPermissionView::FullAccess => ContextPermission::FullAccess,
+            ContextPermissionView::Limited { reserved_balance } => {
+                ContextPermission::Limited { reserved_balance }
+            }
+            ContextPermissionView::Blocked => ContextPermission::Blocked,
+        }
+    }
+}
+
+impl From<ContextPermission> for ContextPermissionView {
+    fn from(other: ContextPermission) -> Self {
+        match other {
+            ContextPermission::FullAccess => ContextPermissionView::FullAccess,
+            ContextPermission::Limited { reserved_balance } => {
+                ContextPermissionView::Limited { reserved_balance }
+            }
+            ContextPermission::Blocked => ContextPermissionView::Blocked,
+        }
     }
 }
 

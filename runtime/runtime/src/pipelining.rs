@@ -244,6 +244,9 @@ impl ReceiptPreparationPipeline {
                 | Action::DeleteKey(_)
                 | Action::DeleteAccount(_)
                 | Action::DeployGlobalContract(_) => {}
+                // TODO(sharded_contract): consider pipelining consequences
+                Action::SetContextPermission(_set_context_permission_action) => todo!(),
+                Action::SwitchContext(_switch_context_action) => todo!(),
             }
         }
         return any_function_calls;

@@ -9,6 +9,7 @@ use near_crypto::PublicKey;
 use near_parameters::{AccountCreationConfig, ActionCosts, RuntimeConfig, RuntimeFeesConfig};
 use near_primitives::account::{AccessKey, AccessKeyPermission, Account, AccountContract};
 use near_primitives::action::delegate::{DelegateAction, SignedDelegateAction};
+use near_primitives::action::{ContractContext, SwitchContextAction};
 use near_primitives::config::ViewConfig;
 use near_primitives::errors::{ActionError, ActionErrorKind, InvalidAccessKeyError, RuntimeError};
 use near_primitives::hash::CryptoHash;
@@ -981,7 +982,10 @@ pub(crate) fn check_actor_permissions(
         | Action::AddKey(_)
         | Action::DeleteKey(_)
         | Action::DeployGlobalContract(_)
-        | Action::UseGlobalContract(_) => {
+        | Action::UseGlobalContract(_) 
+        // TODO: Decide if setting limited should be allowed by a foreign account
+        | Action::SetContextPermission(_)
+        => {
             if actor_id != account_id {
                 return Err(ActionErrorKind::ActorNoPermission {
                     account_id: account_id.clone(),
@@ -1006,6 +1010,18 @@ pub(crate) fn check_actor_permissions(
                 .into());
             }
         }
+        Action::SwitchContext(boxed) => {
+            // Most of the checks are done on creation and verification of a transaction.
+            // TODO: do the remaining necessary checks 
+            let SwitchContextAction { caller, target } = boxed.as_ref();
+            match (caller, target) {
+                (ContractContext::Root, ContractContext::Root) => todo!(),
+                (ContractContext::Root, ContractContext::Sharded { .. }) => todo!(),
+                (ContractContext::Sharded { .. }, ContractContext::Root) => todo!(),
+                (ContractContext::Sharded { .. }, ContractContext::Sharded { .. }) => todo!(),
+                _ => todo!(),
+            }
+        },
         Action::CreateAccount(_) | Action::FunctionCall(_) | Action::Transfer(_) => (),
         Action::Delegate(_) => (),
     };
@@ -1064,14 +1080,19 @@ pub(crate) fn check_account_existence(
         | Action::DeleteAccount(_)
         | Action::Delegate(_)
         | Action::DeployGlobalContract(_)
-        | Action::UseGlobalContract(_) => {
+        | Action::UseGlobalContract(_) 
+        // TODO(sharded_contract): might want to create context
+        | Action::SetContextPermission(_) 
+        // TODO(sharded_contract): need to also check context existence, here or somewhere else
+        | Action::SwitchContext(_) 
+        => {
             if account.is_none() {
                 return Err(ActionErrorKind::AccountDoesNotExist {
                     account_id: account_id.clone(),
                 }
                 .into());
             }
-        }
+        },
     };
     Ok(())
 }

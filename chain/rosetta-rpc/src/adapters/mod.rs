@@ -487,6 +487,11 @@ impl From<NearActions> for Vec<crate::models::Operation> {
                 | near_primitives::transaction::Action::UseGlobalContract(_) => {
                     // TODO(#12639): Implement global contracts support, ignored for now.
                 }
+                // TODO(sharded_contract): add rosetta support
+                near_primitives::action::Action::SetContextPermission(
+                    _set_context_permission_action,
+                ) => todo!(),
+                near_primitives::action::Action::SwitchContext(_switch_context_action) => todo!(),
             }
         }
         operations

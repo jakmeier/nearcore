@@ -310,6 +310,82 @@ pub struct TransferAction {
     BorshDeserialize,
     PartialEq,
     Eq,
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    ProtocolSchema,
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetContextPermissionAction {
+    pub context: ContractContext,
+    pub permission: ContextPermission,
+}
+
+#[derive(
+    BorshSerialize,
+    BorshDeserialize,
+    PartialEq,
+    Eq,
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    ProtocolSchema,
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SwitchContextAction {
+    pub caller: ContractContext,
+    pub target: ContractContext,
+}
+
+#[derive(
+    BorshSerialize,
+    BorshDeserialize,
+    PartialEq,
+    Eq,
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    ProtocolSchema,
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum ContractContext {
+    /// The root context is the default context, used when running in the main
+    /// namespace of an account.
+    Root,
+    /// Running under a sharded contract context, defined by a globally deployed code.
+    ///
+    /// TODO: Do we need to support by account and by code? Or should it just be by name?
+    Sharded { code_id: GlobalContractIdentifier },
+}
+
+#[derive(
+    BorshSerialize,
+    BorshDeserialize,
+    PartialEq,
+    Eq,
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    ProtocolSchema,
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum ContextPermission {
+    FullAccess,
+    Limited { reserved_balance: Balance },
+    Blocked,
+}
+
+#[derive(
+    BorshSerialize,
+    BorshDeserialize,
+    PartialEq,
+    Eq,
     Debug,
     Clone,
     serde::Serialize,
@@ -334,6 +410,8 @@ pub enum Action {
     Delegate(Box<delegate::SignedDelegateAction>),
     DeployGlobalContract(DeployGlobalContractAction),
     UseGlobalContract(Box<UseGlobalContractAction>),
+    SetContextPermission(Box<SetContextPermissionAction>),
+    SwitchContext(Box<SwitchContextAction>),
 }
 
 const _: () = assert!(
@@ -411,5 +489,17 @@ impl From<DeleteKeyAction> for Action {
 impl From<DeleteAccountAction> for Action {
     fn from(delete_account_action: DeleteAccountAction) -> Self {
         Self::DeleteAccount(delete_account_action)
+    }
+}
+
+impl From<SetContextPermissionAction> for Action {
+    fn from(inner: SetContextPermissionAction) -> Self {
+        Self::SetContextPermission(Box::new(inner))
+    }
+}
+
+impl From<SwitchContextAction> for Action {
+    fn from(inner: SwitchContextAction) -> Self {
+        Self::SwitchContext(Box::new(inner))
     }
 }

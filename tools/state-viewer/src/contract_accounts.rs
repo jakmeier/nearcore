@@ -138,6 +138,8 @@ pub(crate) enum ActionType {
     Delegate,
     DeployGlobalContract,
     UseGlobalContract,
+    SetContextPermission,
+    SwitchContext,
 }
 
 impl ContractAccount {
@@ -348,6 +350,10 @@ fn try_find_actions_spawned_by_receipt(
                                         ActionType::DeployGlobalContract
                                     }
                                     Action::UseGlobalContract(_) => ActionType::UseGlobalContract,
+                                    Action::SetContextPermission(_) => {
+                                        ActionType::SetContextPermission
+                                    }
+                                    Action::SwitchContext(_) => ActionType::SwitchContext,
                                 };
                                 entry
                                     .actions

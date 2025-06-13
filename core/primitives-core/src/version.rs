@@ -312,6 +312,14 @@ pub enum ProtocolFeature {
     /// Move from ChunkStateWitness being a single struct to a versioned enum.
     VersionedStateWitness,
     SaturatingFloatToInt,
+    /// Features to allow implementing sharded contracts.
+    ///
+    /// This includes new actions for creating and using sharded contract
+    /// contexts, new host functions, and possibly more changes described in the
+    /// NEP.
+    ///
+    /// [NEP-0605](https://github.com/near/NEPs/pull/605)
+    ShardedContracts,
 }
 
 impl ProtocolFeature {
@@ -414,6 +422,7 @@ impl ProtocolFeature {
             // that always enables this for mocknet (see config_mocknet function).
             ProtocolFeature::ShuffleShardAssignments => 143,
             ProtocolFeature::ExcludeExistingCodeFromWitnessForCodeLen => 148,
+            ProtocolFeature::ShardedContracts => 149,
             // Place features that are not yet in Nightly below this line.
         }
     }

@@ -4,8 +4,10 @@ use crate::near_primitives::account::Account;
 use near_crypto::key_conversion::is_valid_staking_key;
 use near_parameters::RuntimeConfig;
 use near_primitives::account::{AccessKey, AccessKeyPermission};
-use near_primitives::action::DeployGlobalContractAction;
 use near_primitives::action::delegate::SignedDelegateAction;
+use near_primitives::action::{
+    DeployGlobalContractAction, SetContextPermissionAction, SwitchContextAction,
+};
 use near_primitives::errors::{
     ActionsValidationError, InvalidAccessKeyError, InvalidTxError, ReceiptValidationError,
 };
@@ -417,6 +419,12 @@ pub fn validate_action(
         Action::DeleteKey(_) => Ok(()),
         Action::DeleteAccount(a) => validate_delete_action(a),
         Action::Delegate(a) => validate_delegate_action(limit_config, a, current_protocol_version),
+        Action::SetContextPermission(action) => {
+            validate_set_context_permission_action(action, current_protocol_version)
+        }
+        Action::SwitchContext(action) => {
+            validate_switch_context_action(action, current_protocol_version)
+        }
     }
 }
 
@@ -581,6 +589,40 @@ fn check_global_contracts_enabled(
     if !ProtocolFeature::GlobalContracts.enabled(current_protocol_version) {
         return Err(ActionsValidationError::UnsupportedProtocolFeature {
             protocol_feature: "GlobalContracts".to_owned(),
+            version: current_protocol_version,
+        });
+    }
+    Ok(())
+}
+
+fn validate_set_context_permission_action(
+    _action: &SetContextPermissionAction,
+    current_protocol_version: ProtocolVersion,
+) -> Result<(), ActionsValidationError> {
+    check_sharded_contracts_enabled(current_protocol_version)?;
+
+    // TODO(sharded_contract): add validation of action content
+
+    Ok(())
+}
+
+fn validate_switch_context_action(
+    _action: &SwitchContextAction,
+    current_protocol_version: ProtocolVersion,
+) -> Result<(), ActionsValidationError> {
+    check_sharded_contracts_enabled(current_protocol_version)?;
+
+    // TODO(sharded_contract): add validation of action content
+
+    Ok(())
+}
+
+fn check_sharded_contracts_enabled(
+    current_protocol_version: ProtocolVersion,
+) -> Result<(), ActionsValidationError> {
+    if !ProtocolFeature::ShardedContracts.enabled(current_protocol_version) {
+        return Err(ActionsValidationError::UnsupportedProtocolFeature {
+            protocol_feature: "ShardedContracts".to_owned(),
             version: current_protocol_version,
         });
     }
