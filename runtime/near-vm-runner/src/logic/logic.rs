@@ -824,9 +824,15 @@ impl<'a> VMLogic<'a> {
     ///
     /// `base`
     pub fn storage_usage(&mut self) -> Result<StorageUsage> {
+        // TODO(sharded_contract): What should this return in a limited context?
         self.result_state.gas_counter.pay_base(base)?;
         Ok(self.result_state.current_storage_usage)
     }
+    // TODO(sharded_contract): Is something like this required?
+    // pub fn storage_limit(&mut self) -> Result<StorageUsage> {}
+    // Or maybe even returning another enum?
+    // pub fn subcontract_permission(&mut self) -> Result<u64> {}
+
 
     // #################
     // # Economics API #

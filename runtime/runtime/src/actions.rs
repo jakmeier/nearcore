@@ -9,8 +9,7 @@ use near_crypto::PublicKey;
 use near_parameters::{AccountCreationConfig, ActionCosts, RuntimeConfig, RuntimeFeesConfig};
 use near_primitives::account::{AccessKey, AccessKeyPermission, Account, AccountContract};
 use near_primitives::action::delegate::{DelegateAction, SignedDelegateAction};
-use near_primitives::action::SwitchContextAction;
-use near_primitives_core::contract_context::ContractContext;
+use near_primitives::action::{SetSubcontractPermissionAction, SwitchContextAction};
 use near_primitives::config::ViewConfig;
 use near_primitives::errors::{ActionError, ActionErrorKind, InvalidAccessKeyError, RuntimeError};
 use near_primitives::hash::CryptoHash;
@@ -21,6 +20,7 @@ use near_primitives::transaction::{
     Action, AddKeyAction, DeleteAccountAction, DeleteKeyAction, DeployContractAction,
     FunctionCallAction, StakeAction,
 };
+use near_primitives::trie_key::TrieKey;
 use near_primitives::types::validator_stake::ValidatorStake;
 use near_primitives::types::{
     AccountId, Balance, BlockHeight, EpochInfoProvider, Gas, StorageUsage,
@@ -28,11 +28,12 @@ use near_primitives::types::{
 use near_primitives::utils::account_is_implicit;
 use near_primitives::version::ProtocolVersion;
 use near_primitives_core::account::id::AccountType;
+use near_primitives_core::contract_context::{ContractContext, SubcontractPermission};
 use near_primitives_core::version::ProtocolFeature;
 use near_store::{
     StorageError, TrieUpdate, enqueue_promise_yield_timeout, get_access_key,
-    get_promise_yield_indices, remove_access_key, remove_account, set_access_key,
-    set_promise_yield_indices,
+    get_promise_yield_indices, get_subcontract_permission, remove_access_key, remove_account,
+    set_access_key, set_promise_yield_indices, set_subcontract_permission,
 };
 use near_vm_runner::logic::errors::{
     CompilationError, FunctionCallError, InconsistentStateError, VMRunnerError,
@@ -56,6 +57,10 @@ pub(crate) fn execute_function_call(
     config: &RuntimeConfig,
     is_last_action: bool,
     view_config: Option<ViewConfig>,
+    current_contract_context: ContractContext,
+    // TODO(sharded_contract): probably pass this down to `VMContext`
+    _current_contract_permission: &SubcontractPermission,
+    predecessor_contract_context: ContractContext,
 ) -> Result<VMOutcome, RuntimeError> {
     let account_id = runtime_ext.account_id().clone();
     tracing::debug!(target: "runtime", %account_id, "Calling the contract");
@@ -65,10 +70,6 @@ pub(crate) fn execute_function_call(
     } else {
         vec![]
     };
-
-    // TODO(sharded_contract): Read contract context from incoming actions
-    let current_contract_context= ContractContext::Root;
-    let predecessor_contract_context= ContractContext::Root;
 
     let random_seed =
         near_primitives::utils::create_random_seed(*action_hash, apply_state.random_seed);
@@ -85,8 +86,11 @@ pub(crate) fn execute_function_call(
         block_height: apply_state.block_height,
         block_timestamp: apply_state.block_timestamp,
         epoch_height: apply_state.epoch_height,
+        // TODO(sharded_contract): Should this show 0 for limited contracts?
         account_balance: runtime_ext.account().amount(),
+        // TODO(sharded_contract): Should this show be subcontract usage only?
         account_locked_balance: runtime_ext.account().locked(),
+        // TODO(sharded_contract): Should this show be subcontract usage only?
         storage_usage: runtime_ext.account().storage_usage(),
         attached_deposit: function_call.deposit,
         prepaid_gas: function_call.gas,
@@ -155,6 +159,9 @@ pub(crate) fn action_function_call(
     state_update: &mut TrieUpdate,
     apply_state: &ApplyState,
     account: &mut Account,
+    actor_contract_context: ContractContext,
+    actor_subcontract_permission: &SubcontractPermission,
+    predecessor_contract_context: ContractContext,
     receipt: &Receipt,
     action_receipt: &ActionReceipt,
     promise_results: Arc<[near_vm_runner::logic::types::PromiseResult]>,
@@ -213,6 +220,9 @@ pub(crate) fn action_function_call(
         config,
         is_last_action,
         None,
+        actor_contract_context,
+        actor_subcontract_permission,
+        predecessor_contract_context,
     )?;
 
     match &outcome.aborted {
@@ -978,10 +988,124 @@ fn validate_delegate_action_key(
     Ok(())
 }
 
+pub(crate) fn action_set_subcontract_permission(
+    apply_state: &ApplyState,
+    state_update: &mut TrieUpdate,
+    account: &mut Account,
+    account_id: &AccountId,
+    action: &SetSubcontractPermissionAction,
+) -> Result<(), StorageError> {
+    let SetSubcontractPermissionAction { context, permission } = action;
+    let storage_config = &apply_state.config.fees.storage_usage_config;
+    set_context_permission_impl(
+        state_update,
+        account,
+        account_id,
+        context,
+        permission,
+        storage_config,
+    )?;
+
+    Ok(())
+}
+
+fn set_context_permission_impl(
+    state_update: &mut TrieUpdate,
+    account: &mut Account,
+    account_id: &AccountId,
+    context: &ContractContext,
+    permission: &SubcontractPermission,
+    storage_config: &near_parameters::StorageUsageConfig,
+) -> Result<(), StorageError> {
+    let current_permission =
+        get_subcontract_permission(state_update, account_id.clone(), context.clone())?;
+    let bytes =
+        set_subcontract_permission(state_update, account_id.clone(), context.clone(), permission);
+    let added_bytes = bytes as u64 + storage_config.num_extra_bytes_record;
+    let removed_bytes = if let Some(current_permission) = current_permission {
+        let key = TrieKey::SubcontractPermission {
+            account_id: account_id.clone(),
+            context: context.clone(),
+        };
+        key.len() as u64
+            + borsh::object_length(&current_permission).expect("borsh must not fail") as u64
+            + storage_config.num_extra_bytes_record
+    } else {
+        0
+    };
+    let new_storage_usage = account
+        .storage_usage()
+        .checked_add(added_bytes)
+        .and_then(|usage| usage.checked_sub(removed_bytes))
+        .ok_or_else(|| {
+            StorageError::StorageInconsistentState(format!(
+                "Storage usage integer overflow for account {}",
+                account_id
+            ))
+        })?;
+    account.set_storage_usage(new_storage_usage);
+    Ok(())
+}
+
+pub(crate) fn action_switch_context(
+    apply_state: &ApplyState,
+    state_update: &mut TrieUpdate,
+    account: &mut Account,
+    account_id: &AccountId,
+    actor_contract_context: &mut ContractContext,
+    actor_subcontract_permission: &mut SubcontractPermission,
+    predecessor_contract_context: &mut ContractContext,
+    action: &SwitchContextAction,
+    result: &mut ActionResult,
+) -> Result<(), StorageError> {
+    let SwitchContextAction { caller, target, create_missing_context } = action;
+
+    let maybe_subcontract_permission = match target {
+        ContractContext::Root => Some(SubcontractPermission::FullAccess),
+        non_root_context => {
+            get_subcontract_permission(state_update, account_id.clone(), non_root_context.clone())?
+        }
+    };
+
+    let subcontract_permission = match maybe_subcontract_permission {
+        Some(it) => it,
+        None => {
+            // Lazy subcontract creation if opted in by caller
+
+            if *create_missing_context {
+                let storage_config = &apply_state.config.fees.storage_usage_config;
+                let new_permission = SubcontractPermission::Limited { reserved_balance: 0 };
+                set_context_permission_impl(
+                    state_update,
+                    account,
+                    account_id,
+                    target,
+                    &new_permission,
+                    storage_config,
+                )?;
+                new_permission
+            } else {
+                result.result = Err(ActionErrorKind::SubcontractDoesNotExist {
+                    contract_context: target.clone(),
+                }
+                .into());
+                return Ok(());
+            }
+        }
+    };
+
+    *predecessor_contract_context = caller.clone();
+    *actor_subcontract_permission = subcontract_permission;
+    *actor_contract_context = target.clone();
+
+    Ok(())
+}
+
 pub(crate) fn check_actor_permissions(
     action: &Action,
     account: &Option<Account>,
     actor_id: &AccountId,
+    contract_context: &ContractContext,
     account_id: &AccountId,
 ) -> Result<(), ActionError> {
     match action {
@@ -990,26 +1114,14 @@ pub(crate) fn check_actor_permissions(
         | Action::AddKey(_)
         | Action::DeleteKey(_)
         | Action::DeployGlobalContract(_)
-        | Action::UseGlobalContract(_) 
-        // TODO: Decide if setting limited should be allowed by a foreign account
-        | Action::SetContextPermission(_)
-        => {
-            if actor_id != account_id {
-                return Err(ActionErrorKind::ActorNoPermission {
-                    account_id: account_id.clone(),
-                    actor_id: actor_id.clone(),
-                }
-                .into());
-            }
+        | Action::UseGlobalContract(_)
+        // limited subcontract creation is allowed without full access but
+        // only through `SwitchContext` with `create_missing_context = true`.
+        | Action::SetSubcontractPermission(_) => {
+            check_full_access(account_id, actor_id, contract_context)?;
         }
         Action::DeleteAccount(_) => {
-            if actor_id != account_id {
-                return Err(ActionErrorKind::ActorNoPermission {
-                    account_id: account_id.clone(),
-                    actor_id: actor_id.clone(),
-                }
-                .into());
-            }
+            check_full_access(account_id, actor_id, contract_context)?;
             let account = account.as_ref().unwrap();
             if account.locked() != 0 {
                 return Err(ActionErrorKind::DeleteAccountStaking {
@@ -1017,20 +1129,13 @@ pub(crate) fn check_actor_permissions(
                 }
                 .into());
             }
-        }
-        Action::SwitchContext(boxed) => {
-            // Most of the checks are done on creation and verification of a transaction.
-            // TODO: do the remaining necessary checks 
-            let SwitchContextAction { caller, target } = boxed.as_ref();
-            match (caller, target) {
-                (ContractContext::Root, ContractContext::Root) => todo!(),
-                (ContractContext::Root, ContractContext::ShardedByAccountId { .. }) => todo!(),
-                (ContractContext::Root, ContractContext::ShardedByCodeHash { .. }) => todo!(),
-                (_,_) => todo!(),
-            }
         },
         Action::CreateAccount(_) | Action::FunctionCall(_) | Action::Transfer(_) => (),
         Action::Delegate(_) => (),
+        // All checks are done on creation and verification of a transaction. It
+        // can't be checked here, since the permission to switch to context
+        // depends on the caller's subcontract's permissions.
+        Action::SwitchContext(_) => (),
     };
     Ok(())
 }
@@ -1087,11 +1192,11 @@ pub(crate) fn check_account_existence(
         | Action::DeleteAccount(_)
         | Action::Delegate(_)
         | Action::DeployGlobalContract(_)
-        | Action::UseGlobalContract(_) 
-        // TODO(sharded_contract): might want to create context
-        | Action::SetContextPermission(_) 
+        | Action::UseGlobalContract(_)
+        // TODO(sharded_contract): need to check context existence, unless `create_missing_context` is set
+        | Action::SetSubcontractPermission(_)
         // TODO(sharded_contract): need to also check context existence, here or somewhere else
-        | Action::SwitchContext(_) 
+        | Action::SwitchContext(_)
         => {
             if account.is_none() {
                 return Err(ActionErrorKind::AccountDoesNotExist {
@@ -1124,6 +1229,36 @@ fn check_transfer_to_nonexisting_account(
         Ok(())
     } else {
         Err(ActionErrorKind::AccountDoesNotExist { account_id: account_id.clone() }.into())
+    }
+}
+
+/// Checks if the actor in a given context has full access on the target account
+/// id.
+///
+/// This returns `ActorNoPermission` if the actor has limited access. Limited
+/// access means it either is a foreign account or it is acting in a non-root
+/// contract context.
+///
+/// Note that full-access subcontracts on the same account can switch to the
+/// root context to gain full access, while limited subcontracts cannot. This
+/// check, however, happens at the time of receipt validation for the context
+/// switching action. Here we only check that we are in root context while
+/// executing.
+fn check_full_access(
+    account_id: &AccountId,
+    actor_id: &AccountId,
+    context: &ContractContext,
+) -> Result<(), ActionError> {
+    let foreign_account = actor_id != account_id;
+    let subcontract = !matches!(context, ContractContext::Root);
+    if foreign_account || subcontract {
+        Err(ActionErrorKind::ActorNoPermission {
+            account_id: account_id.clone(),
+            actor_id: actor_id.clone(),
+        }
+        .into())
+    } else {
+        Ok(())
     }
 }
 

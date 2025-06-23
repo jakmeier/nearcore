@@ -58,6 +58,7 @@ use near_primitives::utils::{
 };
 use near_primitives::version::ProtocolVersion;
 use near_primitives_core::apply::ApplyChunkReason;
+use near_primitives_core::contract_context::{ContractContext, SubcontractPermission};
 use near_store::trie::AccessOptions;
 use near_store::trie::receipts_column_helper::DelayedReceiptQueue;
 use near_store::trie::update::TrieUpdateResult;
@@ -439,6 +440,9 @@ impl Runtime {
         preparation_pipeline: &ReceiptPreparationPipeline,
         account: &mut Option<Account>,
         actor_id: &mut AccountId,
+        actor_contract_context: &mut ContractContext,
+        actor_subcontract_permission: &mut SubcontractPermission,
+        predecessor_contract_context: &mut ContractContext,
         receipt: &Receipt,
         action_receipt: &ActionReceipt,
         promise_results: Arc<[PromiseResult]>,
@@ -476,7 +480,9 @@ impl Runtime {
             return Ok(result);
         }
         // Permission validation
-        if let Err(e) = check_actor_permissions(action, account, actor_id, account_id) {
+        if let Err(e) =
+            check_actor_permissions(action, account, actor_id, actor_contract_context, account_id)
+        {
             result.result = Err(e);
             return Ok(result);
         }
@@ -538,6 +544,9 @@ impl Runtime {
                     state_update,
                     apply_state,
                     account,
+                    actor_contract_context.clone(),
+                    actor_subcontract_permission,
+                    predecessor_contract_context.clone(),
                     receipt,
                     action_receipt,
                     promise_results,
@@ -618,9 +627,28 @@ impl Runtime {
                     receipt.priority(),
                 )?;
             }
-            // TODO(sharded_contract): actually execute actions
-            Action::SetContextPermission(_set_context_permission_action) => todo!(),
-            Action::SwitchContext(_switch_context_action) => todo!(),
+            Action::SetSubcontractPermission(action) => {
+                action_set_subcontract_permission(
+                    apply_state,
+                    state_update,
+                    account.as_mut().expect(EXPECT_ACCOUNT_EXISTS),
+                    account_id,
+                    action,
+                )?;
+            }
+            Action::SwitchContext(action) => {
+                action_switch_context(
+                    apply_state,
+                    state_update,
+                    account.as_mut().expect(EXPECT_ACCOUNT_EXISTS),
+                    account_id,
+                    actor_contract_context,
+                    actor_subcontract_permission,
+                    predecessor_contract_context,
+                    action,
+                    &mut result,
+                )?;
+            }
         };
         Ok(result)
     }
@@ -679,6 +707,9 @@ impl Runtime {
 
         let mut account = get_account(state_update, account_id)?;
         let mut actor_id = receipt.predecessor_id().clone();
+        let mut actor_contract_context = ContractContext::Root;
+        let mut actor_contract_permission = SubcontractPermission::FullAccess;
+        let mut predecessor_contract_context = ContractContext::Root;
         let mut result = ActionResult::default();
         let exec_fees = apply_state.config.fees.fee(ActionCosts::new_action_receipt).exec_fee();
         result.gas_used = exec_fees;
@@ -702,6 +733,9 @@ impl Runtime {
                 preparation_pipeline,
                 &mut account,
                 &mut actor_id,
+                &mut actor_contract_context,
+                &mut actor_contract_permission,
+                &mut predecessor_contract_context,
                 receipt,
                 action_receipt,
                 Arc::clone(&promise_results),
