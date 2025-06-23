@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use near_crypto::PublicKey;
 use near_primitives_core::{
     account::AccessKey,
-    contract_context::{ContextPermission, ContractContext},
+    contract_context::{ContractContext, SubcontractPermission},
     hash::CryptoHash,
     serialize::dec_format,
     types::{AccountId, Balance, Gas},
@@ -318,9 +318,9 @@ pub struct TransferAction {
     ProtocolSchema,
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct SetContextPermissionAction {
+pub struct SetSubcontractPermissionAction {
     pub context: ContractContext,
-    pub permission: ContextPermission,
+    pub permission: SubcontractPermission,
 }
 
 #[derive(
@@ -370,7 +370,7 @@ pub enum Action {
     Delegate(Box<delegate::SignedDelegateAction>),
     DeployGlobalContract(DeployGlobalContractAction),
     UseGlobalContract(Box<UseGlobalContractAction>),
-    SetContextPermission(Box<SetContextPermissionAction>),
+    SetSubcontractPermission(Box<SetSubcontractPermissionAction>),
     SwitchContext(Box<SwitchContextAction>),
 }
 
@@ -452,9 +452,9 @@ impl From<DeleteAccountAction> for Action {
     }
 }
 
-impl From<SetContextPermissionAction> for Action {
-    fn from(inner: SetContextPermissionAction) -> Self {
-        Self::SetContextPermission(Box::new(inner))
+impl From<SetSubcontractPermissionAction> for Action {
+    fn from(inner: SetSubcontractPermissionAction) -> Self {
+        Self::SetSubcontractPermission(Box::new(inner))
     }
 }
 

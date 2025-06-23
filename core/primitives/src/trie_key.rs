@@ -75,7 +75,7 @@ pub mod col {
     /// (`Vec<u8>`)
     pub const SUBCONTRACT_DATA: u8 = 20;
     /// Permission level of a subcontract.
-    /// (`ContextPermission`)
+    /// (`SubcontractPermission`)
     pub const SUBCONTRACT_PERMISSION: u8 = 21;
 
     /// All columns except those used for the delayed receipts queue, the yielded promises
@@ -257,7 +257,7 @@ pub enum TrieKey {
         index: Option<NonceIndex>,
     },
     /// Stores permissions for subcontracts.
-    /// Values are of type `ContextPermission`.
+    /// Values are of type `SubcontractPermission`.
     SubcontractPermission {
         account_id: AccountId,
         context: ContractContext,

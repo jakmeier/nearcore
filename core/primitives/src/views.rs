@@ -7,7 +7,7 @@ use crate::account::{AccessKey, AccessKeyPermission, Account, FunctionCallPermis
 use crate::action::delegate::{DelegateAction, SignedDelegateAction};
 use crate::action::{
     DeployGlobalContractAction, GlobalContractDeployMode, GlobalContractIdentifier,
-    SetContextPermissionAction, SwitchContextAction, UseGlobalContractAction,
+    SetSubcontractPermissionAction, SwitchContextAction, UseGlobalContractAction,
 };
 use crate::bandwidth_scheduler::BandwidthRequests;
 use crate::block::{Block, BlockHeader, Tip};
@@ -49,7 +49,7 @@ use near_parameters::config::CongestionControlConfig;
 use near_parameters::view::CongestionControlConfigView;
 use near_parameters::{ActionCosts, ExtCosts};
 use near_primitives_core::account::{AccountContract, GasKey};
-use near_primitives_core::contract_context::{ContextPermission, ContractContext};
+use near_primitives_core::contract_context::{ContractContext, SubcontractPermission};
 use near_primitives_core::types::NonceIndex;
 use near_schema_checker_lib::ProtocolSchema;
 use near_time::Utc;
@@ -1317,9 +1317,9 @@ pub enum ActionView {
     UseGlobalContractByAccountId {
         account_id: AccountId,
     },
-    SetContextPermission {
+    SetSubcontractPermission {
         context: ContractContextView,
-        permission: ContextPermissionView,
+        permission: SubcontractPermissionView,
     },
     SwitchContext {
         caller: ContractContextView,
@@ -1375,7 +1375,7 @@ impl From<Action> for ActionView {
                     ActionView::UseGlobalContractByAccountId { account_id }
                 }
             },
-            Action::SetContextPermission(action) => ActionView::SetContextPermission {
+            Action::SetSubcontractPermission(action) => ActionView::SetSubcontractPermission {
                 context: action.context.into(),
                 permission: action.permission.into(),
             },
@@ -1443,8 +1443,8 @@ impl TryFrom<ActionView> for Action {
                     contract_identifier: GlobalContractIdentifier::AccountId(account_id),
                 }))
             }
-            ActionView::SetContextPermission { context, permission } => {
-                Action::SetContextPermission(Box::new(SetContextPermissionAction {
+            ActionView::SetSubcontractPermission { context, permission } => {
+                Action::SetSubcontractPermission(Box::new(SetSubcontractPermissionAction {
                     context: context.into(),
                     permission: permission.into(),
                 }))
@@ -2644,7 +2644,7 @@ pub enum StateChangeValueView {
     SubcontractPermission {
         account_id: AccountId,
         context: ContractContext,
-        permission: ContextPermission,
+        permission: SubcontractPermission,
     },
     ContractCodeUpdate {
         account_id: AccountId,
@@ -2855,32 +2855,29 @@ impl From<ContractContextView> for ContractContext {
     serde::Deserialize,
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum ContextPermissionView {
+pub enum SubcontractPermissionView {
     FullAccess,
     Limited { reserved_balance: Balance },
-    Blocked,
 }
 
-impl From<ContextPermissionView> for ContextPermission {
-    fn from(other: ContextPermissionView) -> Self {
+impl From<SubcontractPermissionView> for SubcontractPermission {
+    fn from(other: SubcontractPermissionView) -> Self {
         match other {
-            ContextPermissionView::FullAccess => ContextPermission::FullAccess,
-            ContextPermissionView::Limited { reserved_balance } => {
-                ContextPermission::Limited { reserved_balance }
+            SubcontractPermissionView::FullAccess => SubcontractPermission::FullAccess,
+            SubcontractPermissionView::Limited { reserved_balance } => {
+                SubcontractPermission::Limited { reserved_balance }
             }
-            ContextPermissionView::Blocked => ContextPermission::Blocked,
         }
     }
 }
 
-impl From<ContextPermission> for ContextPermissionView {
-    fn from(other: ContextPermission) -> Self {
+impl From<SubcontractPermission> for SubcontractPermissionView {
+    fn from(other: SubcontractPermission) -> Self {
         match other {
-            ContextPermission::FullAccess => ContextPermissionView::FullAccess,
-            ContextPermission::Limited { reserved_balance } => {
-                ContextPermissionView::Limited { reserved_balance }
+            SubcontractPermission::FullAccess => SubcontractPermissionView::FullAccess,
+            SubcontractPermission::Limited { reserved_balance } => {
+                SubcontractPermissionView::Limited { reserved_balance }
             }
-            ContextPermission::Blocked => ContextPermissionView::Blocked,
         }
     }
 }

@@ -8,7 +8,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub use chunk_validator_stats::ChunkStats;
 use near_crypto::PublicKey;
 use near_primitives_core::account::GasKey;
-use near_primitives_core::contract_context::{ContextPermission, ContractContext};
+use near_primitives_core::contract_context::{SubcontractPermission, ContractContext};
 /// Reexport primitive types
 pub use near_primitives_core::types::*;
 use near_schema_checker_lib::ProtocolSchema;
@@ -312,7 +312,7 @@ pub enum StateChangeValue {
     SubcontractPermission {
         account_id: AccountId,
         context: ContractContext,
-        permission: ContextPermission,
+        permission: SubcontractPermission,
     },
     ContractCodeUpdate {
         account_id: AccountId,

@@ -6,7 +6,7 @@ use near_parameters::RuntimeConfig;
 use near_primitives::account::{AccessKey, AccessKeyPermission};
 use near_primitives::action::delegate::SignedDelegateAction;
 use near_primitives::action::{
-    DeployGlobalContractAction, SetContextPermissionAction, SwitchContextAction,
+    DeployGlobalContractAction, SetSubcontractPermissionAction, SwitchContextAction,
 };
 use near_primitives::errors::{
     ActionsValidationError, InvalidAccessKeyError, InvalidTxError, ReceiptValidationError,
@@ -419,8 +419,8 @@ pub fn validate_action(
         Action::DeleteKey(_) => Ok(()),
         Action::DeleteAccount(a) => validate_delete_action(a),
         Action::Delegate(a) => validate_delegate_action(limit_config, a, current_protocol_version),
-        Action::SetContextPermission(action) => {
-            validate_set_context_permission_action(action, current_protocol_version)
+        Action::SetSubcontractPermission(action) => {
+            validate_set_subcontract_permission_action(action, current_protocol_version)
         }
         Action::SwitchContext(action) => {
             validate_switch_context_action(action, current_protocol_version)
@@ -595,8 +595,8 @@ fn check_global_contracts_enabled(
     Ok(())
 }
 
-fn validate_set_context_permission_action(
-    _action: &SetContextPermissionAction,
+fn validate_set_subcontract_permission_action(
+    _action: &SetSubcontractPermissionAction,
     current_protocol_version: ProtocolVersion,
 ) -> Result<(), ActionsValidationError> {
     check_sharded_contracts_enabled(current_protocol_version)?;

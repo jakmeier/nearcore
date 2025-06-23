@@ -28,7 +28,7 @@ pub enum ContractContext {
     ShardedByCodeHash { code_hash: CryptoHash },
 }
 
-/// Defines permissions for a contract context.
+/// Defines permissions for a subcontract context.
 #[derive(
     BorshSerialize,
     BorshDeserialize,
@@ -41,8 +41,7 @@ pub enum ContractContext {
     ProtocolSchema,
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum ContextPermission {
+pub enum SubcontractPermission {
     FullAccess,
     Limited { reserved_balance: Balance },
-    Blocked,
 }
