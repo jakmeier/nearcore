@@ -8,6 +8,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub use chunk_validator_stats::ChunkStats;
 use near_crypto::PublicKey;
 use near_primitives_core::account::GasKey;
+use near_primitives_core::contract_context::{ContextPermission, ContractContext};
 /// Reexport primitive types
 pub use near_primitives_core::types::*;
 use near_schema_checker_lib::ProtocolSchema;
@@ -257,17 +258,69 @@ pub enum StateChangesRequest {
 
 #[derive(Debug)]
 pub enum StateChangeValue {
-    AccountUpdate { account_id: AccountId, account: Account },
-    AccountDeletion { account_id: AccountId },
-    AccessKeyUpdate { account_id: AccountId, public_key: PublicKey, access_key: AccessKey },
-    AccessKeyDeletion { account_id: AccountId, public_key: PublicKey },
-    GasKeyUpdate { account_id: AccountId, public_key: PublicKey, gas_key: GasKey },
-    GasKeyNonceUpdate { account_id: AccountId, public_key: PublicKey, index: u32, nonce: u64 },
-    GasKeyDeletion { account_id: AccountId, public_key: PublicKey },
-    DataUpdate { account_id: AccountId, key: StoreKey, value: StoreValue },
-    DataDeletion { account_id: AccountId, key: StoreKey },
-    ContractCodeUpdate { account_id: AccountId, code: Vec<u8> },
-    ContractCodeDeletion { account_id: AccountId },
+    AccountUpdate {
+        account_id: AccountId,
+        account: Account,
+    },
+    AccountDeletion {
+        account_id: AccountId,
+    },
+    AccessKeyUpdate {
+        account_id: AccountId,
+        public_key: PublicKey,
+        access_key: AccessKey,
+    },
+    AccessKeyDeletion {
+        account_id: AccountId,
+        public_key: PublicKey,
+    },
+    GasKeyUpdate {
+        account_id: AccountId,
+        public_key: PublicKey,
+        gas_key: GasKey,
+    },
+    GasKeyNonceUpdate {
+        account_id: AccountId,
+        public_key: PublicKey,
+        index: u32,
+        nonce: u64,
+    },
+    GasKeyDeletion {
+        account_id: AccountId,
+        public_key: PublicKey,
+    },
+    DataUpdate {
+        account_id: AccountId,
+        key: StoreKey,
+        value: StoreValue,
+    },
+    DataDeletion {
+        account_id: AccountId,
+        key: StoreKey,
+    },
+    SubcontractDataUpdate {
+        account_id: AccountId,
+        context: ContractContext,
+        key: StoreKey,
+        value: StoreValue,
+    },
+    SubcontractDataDeletion {
+        account_id: AccountId,
+        context: ContractContext,
+        key: StoreKey,
+    },
+    SubcontractPermission {
+        account_id: AccountId,
+        context: ContractContext,
+        permission: ContextPermission,
+    },
+    ContractCodeUpdate {
+        account_id: AccountId,
+        code: Vec<u8>,
+    },
+    ContractCodeDeletion {
+        account_id: AccountId,
+    },
 }
 
 impl StateChangeValue {
@@ -282,6 +335,9 @@ impl StateChangeValue {
             | StateChangeValue::GasKeyDeletion { account_id, .. }
             | StateChangeValue::DataUpdate { account_id, .. }
             | StateChangeValue::DataDeletion { account_id, .. }
+            | StateChangeValue::SubcontractDataUpdate { account_id, .. }
+            | StateChangeValue::SubcontractDataDeletion { account_id, .. }
+            | StateChangeValue::SubcontractPermission { account_id, .. }
             | StateChangeValue::ContractCodeUpdate { account_id, .. }
             | StateChangeValue::ContractCodeDeletion { account_id } => account_id,
         }
@@ -418,6 +474,46 @@ impl StateChanges {
                                     key: key.to_vec().into(),
                                 }
                             },
+                        },
+                    ));
+                }
+                TrieKey::SubcontractData { account_id, context, key } => {
+                    state_changes.extend(changes.into_iter().map(
+                        |RawStateChange { cause, data }| StateChangeWithCause {
+                            cause,
+                            value: if let Some(change_data) = data {
+                                StateChangeValue::SubcontractDataUpdate {
+                                    account_id: account_id.clone(),
+                                    context: context.clone(),
+                                    key: key.to_vec().into(),
+                                    value: change_data.into(),
+                                }
+                            } else {
+                                StateChangeValue::SubcontractDataDeletion {
+                                    account_id: account_id.clone(),
+                                    context: context.clone(),
+                                    key: key.to_vec().into(),
+                                }
+                            },
+                        },
+                    ));
+                }
+                TrieKey::SubcontractPermission { account_id, context } => {
+                    state_changes.extend(changes.into_iter().map(
+                        |RawStateChange { cause, data }| {
+                            StateChangeWithCause {
+                                cause,
+                                value: StateChangeValue::SubcontractPermission {
+                                    account_id: account_id.clone(),
+                                    context: context.clone(),
+                                    permission: <_>::try_from_slice(
+                                        data.as_ref().expect("must have data"),
+                                    )
+                                    .expect(
+                                        "Failed to parse internally stored contract permission",
+                                    ),
+                                },
+                            }
                         },
                     ));
                 }

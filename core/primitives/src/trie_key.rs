@@ -2,11 +2,13 @@ use crate::types::AccountId;
 use crate::{action::GlobalContractIdentifier, hash::CryptoHash};
 use borsh::{BorshDeserialize, BorshSerialize, to_vec};
 use near_crypto::PublicKey;
+use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::types::{NonceIndex, ShardId};
 use near_schema_checker_lib::ProtocolSchema;
 use std::mem::size_of;
 
 pub(crate) const ACCOUNT_DATA_SEPARATOR: u8 = b',';
+pub(crate) const CONTRACT_CONTEXT_SEPARATOR: u8 = b':';
 // The use of `ACCESS_KEY` as a separator is a historical artefact.
 // Changing it would require a very long DB migration for basically no benefits.
 pub(crate) const ACCESS_KEY_SEPARATOR: u8 = col::ACCESS_KEY;
@@ -68,6 +70,13 @@ pub mod col {
     /// Gas key is used to store the gas key or a single nonce ID for the gas key.
     /// If index is None, the value is of type `GasKey`; otherwise it is of type u64.
     pub const GAS_KEY: u8 = 19;
+    /// Namespaced contract data as accessible by WASM running in a subcontract
+    /// context.
+    /// (`Vec<u8>`)
+    pub const SUBCONTRACT_DATA: u8 = 20;
+    /// Permission level of a subcontract.
+    /// (`ContextPermission`)
+    pub const SUBCONTRACT_PERMISSION: u8 = 21;
 
     /// All columns except those used for the delayed receipts queue, the yielded promises
     /// queue, and the outgoing receipts buffer, which are global state for the shard.
@@ -247,6 +256,20 @@ pub enum TrieKey {
         public_key: PublicKey,
         index: Option<NonceIndex>,
     },
+    /// Stores permissions for subcontracts.
+    /// Values are of type `ContextPermission`.
+    SubcontractPermission {
+        account_id: AccountId,
+        context: ContractContext,
+    },
+    /// Like `ContractData` but for subcontracts.
+    /// Stores a key-value record `Vec<u8>` within a subcontract deployed on a
+    /// given `AccountId`, `ContractContext`, and a given key.
+    SubcontractData {
+        account_id: AccountId,
+        context: ContractContext,
+        key: Vec<u8>,
+    },
 }
 
 /// Provides `len` function.
@@ -340,6 +363,20 @@ impl TrieKey {
                     + ACCOUNT_DATA_SEPARATOR.len()
                     + public_key.len()
                     + borsh::object_length(index).unwrap()
+            }
+            TrieKey::SubcontractData { account_id, context, key } => {
+                col::SUBCONTRACT_DATA.len()
+                    + account_id.len()
+                    + CONTRACT_CONTEXT_SEPARATOR.len()
+                    + borsh::object_length(context).unwrap()
+                    + ACCOUNT_DATA_SEPARATOR.len()
+                    + key.len()
+            }
+            TrieKey::SubcontractPermission { account_id, context } => {
+                col::SUBCONTRACT_PERMISSION.len()
+                    + account_id.len()
+                    + CONTRACT_CONTEXT_SEPARATOR.len()
+                    + borsh::object_length(context).unwrap()
             }
         }
     }
@@ -445,6 +482,20 @@ impl TrieKey {
                 buf.extend(borsh::to_vec(&public_key).unwrap());
                 buf.extend(borsh::to_vec(&index).unwrap());
             }
+            TrieKey::SubcontractData { account_id, context, key } => {
+                buf.push(col::SUBCONTRACT_DATA);
+                buf.extend(account_id.as_bytes());
+                buf.push(CONTRACT_CONTEXT_SEPARATOR);
+                buf.extend(borsh::to_vec(&context).unwrap());
+                buf.push(ACCOUNT_DATA_SEPARATOR);
+                buf.extend(key);
+            }
+            TrieKey::SubcontractPermission { account_id, context } => {
+                buf.push(col::SUBCONTRACT_PERMISSION);
+                buf.extend(account_id.as_bytes());
+                buf.push(CONTRACT_CONTEXT_SEPARATOR);
+                buf.extend(borsh::to_vec(&context).unwrap());
+            }
         };
         debug_assert_eq!(expected_len, buf.len() - start_len);
     }
@@ -480,6 +531,8 @@ impl TrieKey {
             // correspond to the data stored for that account id, so always returning None here.
             TrieKey::GlobalContractCode { .. } => None,
             TrieKey::GasKey { account_id, .. } => Some(account_id.clone()),
+            TrieKey::SubcontractData { account_id, .. } => Some(account_id.clone()),
+            TrieKey::SubcontractPermission { account_id, .. } => Some(account_id.clone()),
         }
     }
 }
@@ -1112,5 +1165,55 @@ mod tests {
         let mut buf = Vec::new();
         identifier.append_into(&mut buf);
         assert_eq!(buf.len(), identifier.len());
+    }
+
+    #[test]
+    fn test_subcontract_data_key_len() {
+        check_trie_key_len(TrieKey::SubcontractData {
+            account_id: "alice.near".parse().unwrap(),
+            context: ContractContext::Root,
+            key: b"abcd".to_vec(),
+        });
+
+        check_trie_key_len(TrieKey::SubcontractData {
+            account_id: "alice.near".parse().unwrap(),
+            context: ContractContext::ShardedByAccountId {
+                account_id: "bob_123.bob.near".parse().unwrap(),
+            },
+            key: b"1234".to_vec(),
+        });
+
+        check_trie_key_len(TrieKey::SubcontractData {
+            account_id: "alice.near".parse().unwrap(),
+            context: ContractContext::ShardedByCodeHash {
+                code_hash: CryptoHash::hash_bytes(&[1, 2]),
+            },
+            key: b",:,:".to_vec(),
+        });
+    }
+
+    #[test]
+    fn test_subcontract_permission_key_len() {
+        check_trie_key_len(TrieKey::SubcontractPermission {
+            account_id: "near".parse().unwrap(),
+            context: ContractContext::Root,
+        });
+
+        check_trie_key_len(TrieKey::SubcontractPermission {
+            account_id: "alice.near".parse().unwrap(),
+            context: ContractContext::ShardedByAccountId { account_id: "tg".parse().unwrap() },
+        });
+
+        check_trie_key_len(TrieKey::SubcontractPermission {
+            account_id: "a-b.tg".parse().unwrap(),
+            context: ContractContext::ShardedByCodeHash { code_hash: CryptoHash::hash_bytes(&[0]) },
+        });
+    }
+
+    #[track_caller]
+    fn check_trie_key_len(key: TrieKey) {
+        let mut buf = Vec::new();
+        key.append_into(&mut buf);
+        assert_eq!(buf.len(), key.len());
     }
 }

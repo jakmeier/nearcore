@@ -2627,6 +2627,22 @@ pub enum StateChangeValueView {
         #[serde(rename = "key_base64")]
         key: StoreKey,
     },
+    SubcontractDataUpdate {
+        account_id: AccountId,
+        context: ContractContext,
+        key: StoreKey,
+        value: StoreValue,
+    },
+    SubcontractDataDeletion {
+        account_id: AccountId,
+        context: ContractContext,
+        key: StoreKey,
+    },
+    SubcontractPermission {
+        account_id: AccountId,
+        context: ContractContext,
+        permission: ContextPermission,
+    },
     ContractCodeUpdate {
         account_id: AccountId,
         #[serde(rename = "code_base64")]
@@ -2674,6 +2690,15 @@ impl From<StateChangeValue> for StateChangeValueView {
             }
             StateChangeValue::ContractCodeDeletion { account_id } => {
                 Self::ContractCodeDeletion { account_id }
+            }
+            StateChangeValue::SubcontractDataUpdate { account_id, context, key, value } => {
+                Self::SubcontractDataUpdate { account_id, context, key, value }
+            }
+            StateChangeValue::SubcontractDataDeletion { account_id, context, key } => {
+                Self::SubcontractDataDeletion { account_id, context, key }
+            }
+            StateChangeValue::SubcontractPermission { account_id, context, permission } => {
+                Self::SubcontractPermission { account_id, context, permission }
             }
         }
     }
