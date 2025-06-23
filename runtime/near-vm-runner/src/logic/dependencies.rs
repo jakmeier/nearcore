@@ -2,6 +2,7 @@
 use super::VMLogicError;
 use super::types::{GlobalContractDeployMode, GlobalContractIdentifier, ReceiptIndex};
 use near_crypto::PublicKey;
+use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::hash::CryptoHash;
 use near_primitives_core::types::{AccountId, Balance, Gas, GasWeight, Nonce};
 use std::borrow::Cow;
@@ -515,6 +516,24 @@ pub trait External {
         receipt_index: ReceiptIndex,
         beneficiary_id: AccountId,
     ) -> Result<(), VMLogicError>;
+
+    /// Attach the [`SwitchContext`] action to an existing receipt.
+    ///
+    /// # Arguments
+    ///
+    /// * `receipt_index` - an index of Receipt to append an action
+    /// * `caller` - the current contract context
+    /// * `target` - the target contract context to switch to
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `receipt_index` does not refer to a known receipt.
+    fn append_action_switch_context(
+        &mut self,
+        receipt_index: ReceiptIndex,
+        caller: ContractContext,
+        target: ContractContext,
+    );
 
     /// # Panic
     ///

@@ -278,6 +278,8 @@ pub enum HostError {
     },
     /// Contract code hash is malformed.
     ContractCodeHashMalformed,
+    /// VM Logic returned an invalid ContractContext
+    InvalidContractContext,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -522,6 +524,7 @@ impl std::fmt::Display for HostError {
                 limit
             ),
             ContractCodeHashMalformed => write!(f, "contract code hash is malformed"),
+            InvalidContractContext => write!(f, "invalid contract context"),
         }
     }
 }

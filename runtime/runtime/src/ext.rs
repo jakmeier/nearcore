@@ -8,6 +8,7 @@ use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{AccountId, Balance, BlockHeight, EpochId, EpochInfoProvider, Gas};
 use near_primitives::utils::create_receipt_id_from_action_hash;
 use near_primitives::version::ProtocolVersion;
+use near_primitives_core::contract_context::ContractContext;
 use near_store::contract::ContractStorage;
 use near_store::trie::{AccessOptions, AccessTracker};
 use near_store::{KeyLookupMode, TrieUpdate, TrieUpdateValuePtr, has_promise_yield_receipt};
@@ -488,6 +489,15 @@ impl<'a> External for RuntimeExt<'a> {
         beneficiary_id: AccountId,
     ) -> Result<(), VMLogicError> {
         self.receipt_manager.append_action_delete_account(receipt_index, beneficiary_id)
+    }
+
+    fn append_action_switch_context(
+        &mut self,
+        receipt_index: ReceiptIndex,
+        caller: ContractContext,
+        target: ContractContext,
+    ) {
+        self.receipt_manager.append_action_switch_context(receipt_index, caller, target);
     }
 
     fn get_receipt_receiver(&self, receipt_index: ReceiptIndex) -> &AccountId {

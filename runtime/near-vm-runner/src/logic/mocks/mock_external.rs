@@ -2,6 +2,7 @@ use crate::ContractCode;
 use crate::logic::dependencies::{Result, StorageAccessTracker};
 use crate::logic::types::{GlobalContractDeployMode, GlobalContractIdentifier, ReceiptIndex};
 use crate::logic::{External, ValuePtr};
+use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::hash::{CryptoHash, hash};
 use near_primitives_core::types::{AccountId, Balance, Gas, GasWeight};
 use std::collections::HashMap;
@@ -80,6 +81,11 @@ pub enum MockAction {
     YieldResume {
         data_id: CryptoHash,
         data: Vec<u8>,
+    },
+    SwitchContext {
+        receipt_index: ReceiptIndex,
+        caller: ContractContext,
+        target: ContractContext,
     },
 }
 
@@ -347,6 +353,15 @@ impl External for MockedExternal {
     ) -> Result<(), crate::logic::VMLogicError> {
         self.action_log.push(MockAction::DeleteAccount { receipt_index, beneficiary_id });
         Ok(())
+    }
+
+    fn append_action_switch_context(
+        &mut self,
+        receipt_index: ReceiptIndex,
+        caller: ContractContext,
+        target: ContractContext,
+    ) {
+        self.action_log.push(MockAction::SwitchContext { receipt_index, caller, target });
     }
 
     fn get_receipt_receiver(&self, receipt_index: ReceiptIndex) -> &AccountId {

@@ -1024,9 +1024,9 @@ pub(crate) fn check_actor_permissions(
             let SwitchContextAction { caller, target } = boxed.as_ref();
             match (caller, target) {
                 (ContractContext::Root, ContractContext::Root) => todo!(),
-                (ContractContext::Root, ContractContext::Sharded { .. }) => todo!(),
-                (ContractContext::Sharded { .. }, ContractContext::Root) => todo!(),
-                (ContractContext::Sharded { .. }, ContractContext::Sharded { .. }) => todo!(),
+                (ContractContext::Root, ContractContext::ShardedByAccountId { .. }) => todo!(),
+                (ContractContext::Root, ContractContext::ShardedByCodeHash { .. }) => todo!(),
+                (_,_) => todo!(),
             }
         },
         Action::CreateAccount(_) | Action::FunctionCall(_) | Action::Transfer(_) => (),

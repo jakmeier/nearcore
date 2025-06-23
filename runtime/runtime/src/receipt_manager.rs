@@ -2,11 +2,12 @@ use near_crypto::PublicKey;
 use near_primitives::action::{
     Action, AddKeyAction, CreateAccountAction, DeleteAccountAction, DeleteKeyAction,
     DeployContractAction, DeployGlobalContractAction, FunctionCallAction, StakeAction,
-    TransferAction, UseGlobalContractAction,
+    SwitchContextAction, TransferAction, UseGlobalContractAction,
 };
 use near_primitives::errors::RuntimeError;
 use near_primitives::receipt::DataReceiver;
 use near_primitives_core::account::{AccessKey, AccessKeyPermission, FunctionCallPermission};
+use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::hash::CryptoHash;
 use near_primitives_core::types::{AccountId, Balance, Gas, GasWeight, Nonce};
 use near_vm_runner::logic::HostError;
@@ -516,6 +517,18 @@ impl ReceiptManager {
             Action::DeleteAccount(DeleteAccountAction { beneficiary_id }),
         );
         Ok(())
+    }
+
+    pub(super) fn append_action_switch_context(
+        &mut self,
+        receipt_index: ReceiptIndex,
+        caller: ContractContext,
+        target: ContractContext,
+    ) {
+        self.append_action(
+            receipt_index,
+            Action::SwitchContext(Box::new(SwitchContextAction { caller, target })),
+        );
     }
 
     /// Distribute the provided `gas` between receipts managed by this `ReceiptManager` according

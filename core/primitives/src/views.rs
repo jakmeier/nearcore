@@ -2785,23 +2785,19 @@ impl CongestionInfoView {
 pub enum ContractContextView {
     Root,
     ShardedByAccountId { account_id: AccountId },
-    // TODO(sharded_contract) decide on using code hashes for sharded contracts
-    // ShardedByCodeHash { code_hash: CryptoHash },
+    ShardedByCodeHash { code_hash: CryptoHash },
 }
 
 impl From<ContractContext> for ContractContextView {
     fn from(other: ContractContext) -> Self {
         match other {
             ContractContext::Root => ContractContextView::Root,
-            ContractContext::Sharded { account_id } => {
+            ContractContext::ShardedByAccountId { account_id } => {
                 ContractContextView::ShardedByAccountId { account_id }
-            } // TODO(sharded_contract) decide on using code hashes for sharded contracts
-              // ContractContext::Sharded {
-              //     code_id: GlobalContractIdentifier::AccountId(account_id),
-              // } => ContractContextView::ShardedByAccountId { account_id },
-              // ContractContext::Sharded { code_id: GlobalContractIdentifier::CodeHash(code_hash) } => {
-              //     ContractContextView::ShardedByCodeHash { code_hash }
-              // }
+            }
+            ContractContext::ShardedByCodeHash { code_hash } => {
+                ContractContextView::ShardedByCodeHash { code_hash }
+            }
         }
     }
 }
@@ -2811,14 +2807,11 @@ impl From<ContractContextView> for ContractContext {
         match other {
             ContractContextView::Root => ContractContext::Root,
             ContractContextView::ShardedByAccountId { account_id } => {
-                ContractContext::Sharded { account_id }
-            } // TODO(sharded_contract) decide on using code hashes for sharded contracts
-              // ContractContextView::ShardedByAccountId { account_id } => ContractContext::Sharded {
-              //     code_id: GlobalContractIdentifier::AccountId(account_id),
-              // },
-              // ContractContextView::ShardedByCodeHash { code_hash } => {
-              //     ContractContext::Sharded { code_id: GlobalContractIdentifier::CodeHash(code_hash) }
-              // }
+                ContractContext::ShardedByAccountId { account_id }
+            }
+            ContractContextView::ShardedByCodeHash { code_hash } => {
+                ContractContext::ShardedByCodeHash { code_hash }
+            }
         }
     }
 }

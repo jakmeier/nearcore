@@ -1,3 +1,4 @@
+use crate::hash::CryptoHash;
 use crate::types::Balance;
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_account_id::AccountId;
@@ -19,11 +20,12 @@ pub enum ContractContext {
     /// The root context is the default context, used when running in the main
     /// namespace of an account.
     Root,
-    /// Running under a sharded contract context, defined by a globally deployed code.
-    ///
-    /// TODO(sharded_contract): Do we need to support by account and by code? Or should it just be by name?
-    // Sharded { code_id: GlobalContractIdentifier },
-    Sharded { account_id: AccountId },
+    /// Running under a sharded contract context, defined by a globally deployed
+    /// code by account id.
+    ShardedByAccountId { account_id: AccountId },
+    /// Running under a sharded contract context, defined by a globally deployed
+    /// code by code hash.
+    ShardedByCodeHash { code_hash: CryptoHash },
 }
 
 /// Defines permissions for a contract context.

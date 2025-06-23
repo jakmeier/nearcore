@@ -567,14 +567,11 @@ impl<'a> VMLogic<'a> {
 
     /// Saves the current sharded contract context into the register.
     ///
-    /// Returns a bool indicating success (1) or failure (0) as a `u64`.
+    /// Returns a `u64` indicating the type of context.
     ///
-    /// Success means the method was invoked from a sharded context and it has
-    /// been stored in the register.
-    ///
-    /// Failure means we are not running in a sharded context but instead in
-    /// root context or any other context added in the future. Nothing was
-    /// stored in the register in that case.
+    /// 0: ContractContext::Root
+    /// 1: ContractContext::ShardedByAccountId, the register contains an `AccountId`
+    /// 2: ContractContext::ShardedByCodeHash, the register contain a `CryptoHash`
     ///
     /// # Errors
     ///
@@ -591,7 +588,7 @@ impl<'a> VMLogic<'a> {
 
     /// Saves the predecessor sharded contract context into the register.
     ///
-    /// Returns a bool indicating success (1) or failure (0) as a `u64`.
+    /// Returns a `u64` indicating the type of context.
     fn read_sharded_context_into_register(
         &mut self,
         sharded_contract_context: &ContractContext,
@@ -599,7 +596,7 @@ impl<'a> VMLogic<'a> {
     ) -> Result<u64> {
         match sharded_contract_context {
             ContractContext::Root => Ok(0),
-            ContractContext::Sharded { account_id } => {
+            ContractContext::ShardedByAccountId { account_id } => {
                 self.registers.set(
                     &mut self.result_state.gas_counter,
                     &self.config.limit_config,
@@ -607,6 +604,15 @@ impl<'a> VMLogic<'a> {
                     account_id.as_bytes(),
                 )?;
                 Ok(1)
+            }
+            ContractContext::ShardedByCodeHash { code_hash } => {
+                self.registers.set(
+                    &mut self.result_state.gas_counter,
+                    &self.config.limit_config,
+                    register_id,
+                    code_hash.0,
+                )?;
+                Ok(2)
             }
         }
     }
@@ -701,14 +707,11 @@ impl<'a> VMLogic<'a> {
 
     /// Saves the predecessor sharded contract context into the register.
     ///
-    /// Returns a bool indicating success (1) or failure (0) as a `u64`.
+    /// Returns a `u64` indicating the type of context.
     ///
-    /// Success means the method was invoked from a sharded context and it has
-    /// been stored in the register.
-    ///
-    /// Failure means we are not running in a sharded context but instead in
-    /// root context or any other context added in the future. Nothing was
-    /// stored in the register in that case.
+    /// 0: ContractContext::Root
+    /// 1: ContractContext::ShardedByAccountId, the register contains an `AccountId`
+    /// 2: ContractContext::ShardedByCodeHash, the register contain a `CryptoHash`
     ///
     /// # Errors
     ///
@@ -2375,11 +2378,8 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
         }
         let contract_id = match contract_id_ptr {
             GlobalContractIdentifierPtrData::CodeHash { code_hash_len, code_hash_ptr } => {
-                let code_hash_bytes = get_memory_or_register!(self, code_hash_ptr, code_hash_len)?;
-                let code_hash: [_; CryptoHash::LENGTH] = (&*code_hash_bytes)
-                    .try_into()
-                    .map_err(|_| HostError::ContractCodeHashMalformed)?;
-                GlobalContractIdentifier::CodeHash(CryptoHash(code_hash))
+                let code_hash = self.read_and_parse_code_hash(code_hash_ptr, code_hash_len)?;
+                GlobalContractIdentifier::CodeHash(code_hash)
             }
             GlobalContractIdentifierPtrData::AccountId { account_id_len, account_id_ptr } => {
                 let account_id = self.read_and_parse_account_id(account_id_ptr, account_id_len)?;
@@ -2951,6 +2951,90 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
         self.ext.submit_promise_resume_data(data_id, payload).map(u32::from)
     }
 
+    /// Appends `SwitchContext` action to the batch of actions for the given
+    /// promise pointed by `promise_idx`.
+    ///
+    /// `target_context_type` is a `u64` indicating the type of context that's
+    /// represented by the data pointed to by `target_context_len` and
+    /// `target_context_ptr`.
+    ///
+    /// 0: ContractContext::Root
+    /// 1: ContractContext::ShardedByAccountId, the register contains an `AccountId`
+    /// 2: ContractContext::ShardedByCodeHash, the register contain a `CryptoHash`
+    ///
+    /// Unless the type is `Root`, the last two fields point to the data.
+    /// This can be in memory, or in a register.
+    ///
+    /// If the data is in memory, set `target_context_len` to data length
+    /// measured in bytes and `target_context_ptr` to the raw pointer in guest
+    /// memory space of the data.
+    ///
+    /// If the data is in a register, set `target_context_len = u64::MAX` and
+    /// `target_context_ptr = register_id`.
+    ///
+    /// # Errors
+    ///
+    /// * If `promise_idx` does not correspond to an existing promise returns
+    ///   `InvalidPromiseIndex`.
+    /// * If the promise pointed by the `promise_idx` is an ephemeral promise
+    ///   created by `promise_and` returns `CannotAppendActionToJointPromise`.
+    /// * If `target_context_type` is not 0, 1, or 2 returns
+    ///   `InvalidContractContext`.
+    /// * If `target_context_type` is 1 and the data at `target_context_ptr` +
+    ///   `target_context_len` does not parse as `AccountId` , returns
+    ///   `InvalidAccountId`.
+    /// * If `target_context_type` is 2 and the data at `target_context_ptr` +
+    ///   `target_context_len` is not  , returns
+    ///   `InvalidAccountId`.
+    /// * If called as view function returns `ProhibitedInView`.
+    ///
+    /// # Cost
+    ///
+    /// TODO(sharded_contract): add gas costs
+    pub fn promise_batch_action_switch_context(
+        &mut self,
+        promise_idx: u64,
+        target_context_type: u64,
+        target_context_len: u64,
+        target_context_ptr: u64,
+    ) -> Result<()> {
+        self.result_state.gas_counter.pay_base(base)?;
+        if self.context.is_view() {
+            return Err(HostError::ProhibitedInView {
+                method_name: "promise_batch_action_switch_context".to_string(),
+            }
+            .into());
+        }
+
+        // TODO(sharded_contract): permission checks for using root context (not only here)
+
+        let target_context = match target_context_type {
+            0 => ContractContext::Root,
+            1 => {
+                let account_id =
+                    self.read_and_parse_account_id(target_context_ptr, target_context_len)?;
+                ContractContext::ShardedByAccountId { account_id }
+            }
+            2 => {
+                let code_hash =
+                    self.read_and_parse_code_hash(target_context_ptr, target_context_len)?;
+                ContractContext::ShardedByCodeHash { code_hash }
+            }
+            _ => return Err(HostError::InvalidContractContext.into()),
+        };
+
+        let (receipt_idx, _sir) = self.promise_idx_to_receipt_idx_with_sir(promise_idx)?;
+        // TODO(sharded_contract): add gas costs
+        // self.pay_action_base(ActionCosts::delete_key, sir)?;
+
+        self.ext.append_action_switch_context(
+            receipt_idx,
+            self.context.current_contract_context.clone(),
+            target_context,
+        );
+        Ok(())
+    }
+
     /// If the current function is invoked by a callback we can access the execution results of the
     /// promises that caused the callback. This function returns the number of complete and
     /// incomplete callbacks.
@@ -3262,6 +3346,23 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
             )
             .map_err(|_| HostError::BadUTF8)?;
         Ok(account_id)
+    }
+
+    /// Reads a `CryptoHash` from the given location in memory.
+    ///
+    /// # Errors
+    ///
+    /// * If the data is not exactly 32 bytes, returns `ContractCodeHashMalformed`;
+    ///
+    /// # Cost
+    ///
+    /// cost of reading buffer from register or memory
+    ///
+    fn read_and_parse_code_hash(&mut self, ptr: u64, len: u64) -> Result<CryptoHash> {
+        let code_hash_bytes = get_memory_or_register!(self, ptr, len)?;
+        let code_hash: [_; CryptoHash::LENGTH] =
+            (&*code_hash_bytes).try_into().map_err(|_| HostError::ContractCodeHashMalformed)?;
+        Ok(CryptoHash(code_hash))
     }
 
     /// Writes key-value into storage.

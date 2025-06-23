@@ -5522,6 +5522,7 @@ dependencies = [
  "libfuzzer-sys",
  "near-parameters",
  "near-primitives",
+ "near-primitives-core",
  "near-test-contracts",
  "near-vm-runner",
 ]
@@ -7224,6 +7225,7 @@ dependencies = [
  "near-o11y",
  "near-parameters",
  "near-primitives",
+ "near-primitives-core",
  "near-store",
  "near-test-contracts",
  "near-vm-runner",
