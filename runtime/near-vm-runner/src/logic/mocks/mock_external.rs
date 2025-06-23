@@ -86,6 +86,7 @@ pub enum MockAction {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
+        create_missing_context: bool,
     },
 }
 
@@ -360,8 +361,14 @@ impl External for MockedExternal {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
+        create_missing_context: bool,
     ) {
-        self.action_log.push(MockAction::SwitchContext { receipt_index, caller, target });
+        self.action_log.push(MockAction::SwitchContext {
+            receipt_index,
+            caller,
+            target,
+            create_missing_context,
+        });
     }
 
     fn get_receipt_receiver(&self, receipt_index: ReceiptIndex) -> &AccountId {

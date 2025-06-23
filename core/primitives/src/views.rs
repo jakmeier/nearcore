@@ -1324,6 +1324,7 @@ pub enum ActionView {
     SwitchContext {
         caller: ContractContextView,
         target: ContractContextView,
+        create_missing_context: bool,
     },
 }
 
@@ -1381,6 +1382,7 @@ impl From<Action> for ActionView {
             Action::SwitchContext(action) => ActionView::SwitchContext {
                 caller: action.caller.into(),
                 target: action.target.into(),
+                create_missing_context: action.create_missing_context,
             },
         }
     }
@@ -1447,10 +1449,11 @@ impl TryFrom<ActionView> for Action {
                     permission: permission.into(),
                 }))
             }
-            ActionView::SwitchContext { caller, target } => {
+            ActionView::SwitchContext { caller, target, create_missing_context } => {
                 Action::SwitchContext(Box::new(SwitchContextAction {
                     caller: caller.into(),
                     target: target.into(),
+                    create_missing_context,
                 }))
             }
         })

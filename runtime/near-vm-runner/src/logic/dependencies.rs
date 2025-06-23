@@ -533,6 +533,7 @@ pub trait External {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
+        create_missing_context: bool,
     );
 
     /// # Panic

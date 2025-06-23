@@ -524,10 +524,15 @@ impl ReceiptManager {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
+        create_missing_context: bool,
     ) {
         self.append_action(
             receipt_index,
-            Action::SwitchContext(Box::new(SwitchContextAction { caller, target })),
+            Action::SwitchContext(Box::new(SwitchContextAction {
+                caller,
+                target,
+                create_missing_context,
+            })),
         );
     }
 

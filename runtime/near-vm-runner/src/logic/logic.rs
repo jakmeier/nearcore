@@ -2972,6 +2972,11 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
     /// If the data is in a register, set `target_context_len = u64::MAX` and
     /// `target_context_ptr = register_id`.
     ///
+    /// If `create_missing_context` is set to true, the subcontract will be
+    /// initialized on the target account with limited access permissions, if it
+    /// doesn't already exist. This increases the gas cost of the action to cover
+    /// the module creation, storage, and deletion cost.
+    ///
     /// # Errors
     ///
     /// * If `promise_idx` does not correspond to an existing promise returns
@@ -2997,6 +3002,7 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
         target_context_type: u64,
         target_context_len: u64,
         target_context_ptr: u64,
+        create_missing_context: bool,
     ) -> Result<()> {
         self.result_state.gas_counter.pay_base(base)?;
         if self.context.is_view() {
@@ -3031,6 +3037,7 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
             receipt_idx,
             self.context.current_contract_context.clone(),
             target_context,
+            create_missing_context,
         );
         Ok(())
     }

@@ -338,6 +338,7 @@ pub struct SetContextPermissionAction {
 pub struct SwitchContextAction {
     pub caller: ContractContext,
     pub target: ContractContext,
+    pub create_missing_context: bool,
 }
 
 #[derive(

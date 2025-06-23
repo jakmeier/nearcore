@@ -496,8 +496,14 @@ impl<'a> External for RuntimeExt<'a> {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
+        create_missing_context: bool,
     ) {
-        self.receipt_manager.append_action_switch_context(receipt_index, caller, target);
+        self.receipt_manager.append_action_switch_context(
+            receipt_index,
+            caller,
+            target,
+            create_missing_context,
+        );
     }
 
     fn get_receipt_receiver(&self, receipt_index: ReceiptIndex) -> &AccountId {
