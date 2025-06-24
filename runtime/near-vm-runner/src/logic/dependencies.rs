@@ -2,8 +2,8 @@
 use super::VMLogicError;
 use super::types::{GlobalContractDeployMode, GlobalContractIdentifier, ReceiptIndex};
 use near_crypto::PublicKey;
-use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::hash::CryptoHash;
+use near_primitives_core::subcontract::ContractContext;
 use near_primitives_core::types::{AccountId, Balance, Gas, GasWeight, Nonce};
 use std::borrow::Cow;
 
@@ -533,7 +533,7 @@ pub trait External {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
-        create_missing_context: bool,
+        create_missing_subcontract: bool,
     );
 
     /// # Panic

@@ -4,9 +4,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use near_crypto::PublicKey;
 use near_primitives_core::{
     account::AccessKey,
-    contract_context::{ContractContext, SubcontractPermission},
     hash::CryptoHash,
     serialize::dec_format,
+    subcontract::{ContractContext, SubcontractPermission},
     types::{AccountId, Balance, Gas},
 };
 use near_schema_checker_lib::ProtocolSchema;
@@ -338,7 +338,7 @@ pub struct SetSubcontractPermissionAction {
 pub struct SwitchContextAction {
     pub caller: ContractContext,
     pub target: ContractContext,
-    pub create_missing_context: bool,
+    pub create_missing_subcontract: bool,
 }
 
 #[derive(

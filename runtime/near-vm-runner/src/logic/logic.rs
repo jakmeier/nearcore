@@ -19,8 +19,8 @@ use near_parameters::{
     ActionCosts, ExtCosts, RuntimeFeesConfig, transfer_exec_fee, transfer_send_fee,
 };
 use near_primitives_core::config::INLINE_DISK_VALUE_THRESHOLD;
-use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::hash::CryptoHash;
+use near_primitives_core::subcontract::ContractContext;
 use near_primitives_core::types::{
     AccountId, Balance, Compute, EpochHeight, Gas, GasWeight, StorageUsage,
 };
@@ -45,8 +45,17 @@ pub struct ExecutionResultState {
     return_data: ReturnData,
     /// Keeping track of the current account balance, which can decrease when we create promises
     /// and attach balance to them.
+    ///
+    /// TODO(sharded_contract):
+    /// When running in a subcontract's context, this is the accessible amount.
+    /// For full access modules, this is the same as the main account balance.
+    /// For limited modules, this is 0.
     current_account_balance: Balance,
     /// Storage usage of the current account at the moment
+    ///
+    /// TODO(sharded_contract):
+    /// When running in a subcontract's context, this is the usage of just the
+    /// subcontract's isolated space. Even for full access subcontracts.
     current_storage_usage: StorageUsage,
 }
 
@@ -832,7 +841,6 @@ impl<'a> VMLogic<'a> {
     // pub fn storage_limit(&mut self) -> Result<StorageUsage> {}
     // Or maybe even returning another enum?
     // pub fn subcontract_permission(&mut self) -> Result<u64> {}
-
 
     // #################
     // # Economics API #
@@ -2978,7 +2986,7 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
     /// If the data is in a register, set `target_context_len = u64::MAX` and
     /// `target_context_ptr = register_id`.
     ///
-    /// If `create_missing_context` is set to true, the subcontract will be
+    /// If `create_missing_subcontract` is set to true, the subcontract will be
     /// initialized on the target account with limited access permissions, if it
     /// doesn't already exist. This increases the gas cost of the action to cover
     /// the module creation, storage, and deletion cost.
@@ -3008,7 +3016,7 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
         target_context_type: u64,
         target_context_len: u64,
         target_context_ptr: u64,
-        create_missing_context: bool,
+        create_missing_subcontract: bool,
     ) -> Result<()> {
         self.result_state.gas_counter.pay_base(base)?;
         if self.context.is_view() {
@@ -3043,7 +3051,7 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
             receipt_idx,
             self.context.current_contract_context.clone(),
             target_context,
-            create_missing_context,
+            create_missing_subcontract,
         );
         Ok(())
     }

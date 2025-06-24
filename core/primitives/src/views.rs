@@ -49,7 +49,7 @@ use near_parameters::config::CongestionControlConfig;
 use near_parameters::view::CongestionControlConfigView;
 use near_parameters::{ActionCosts, ExtCosts};
 use near_primitives_core::account::{AccountContract, GasKey};
-use near_primitives_core::contract_context::{ContractContext, SubcontractPermission};
+use near_primitives_core::subcontract::{ContractContext, SubcontractPermission};
 use near_primitives_core::types::NonceIndex;
 use near_schema_checker_lib::ProtocolSchema;
 use near_time::Utc;
@@ -1324,7 +1324,7 @@ pub enum ActionView {
     SwitchContext {
         caller: ContractContextView,
         target: ContractContextView,
-        create_missing_context: bool,
+        create_missing_subcontract: bool,
     },
 }
 
@@ -1382,7 +1382,7 @@ impl From<Action> for ActionView {
             Action::SwitchContext(action) => ActionView::SwitchContext {
                 caller: action.caller.into(),
                 target: action.target.into(),
-                create_missing_context: action.create_missing_context,
+                create_missing_subcontract: action.create_missing_subcontract,
             },
         }
     }
@@ -1449,11 +1449,11 @@ impl TryFrom<ActionView> for Action {
                     permission: permission.into(),
                 }))
             }
-            ActionView::SwitchContext { caller, target, create_missing_context } => {
+            ActionView::SwitchContext { caller, target, create_missing_subcontract } => {
                 Action::SwitchContext(Box::new(SwitchContextAction {
                     caller: caller.into(),
                     target: target.into(),
-                    create_missing_context,
+                    create_missing_subcontract,
                 }))
             }
         })

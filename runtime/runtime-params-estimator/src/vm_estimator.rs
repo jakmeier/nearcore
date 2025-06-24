@@ -4,7 +4,7 @@ use crate::{REAL_CONTRACTS_SAMPLE, utils::read_resource};
 use near_parameters::RuntimeConfigStore;
 use near_parameters::vm::VMKind;
 use near_primitives::version::PROTOCOL_VERSION;
-use near_primitives_core::contract_context::ContractContext;
+use near_primitives_core::subcontract::ContractContext;
 use near_vm_runner::internal::VMKindExt;
 use near_vm_runner::logic::VMContext;
 use near_vm_runner::{

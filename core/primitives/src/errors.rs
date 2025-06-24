@@ -6,7 +6,7 @@ use crate::sharding::ChunkHash;
 use crate::types::{AccountId, Balance, EpochId, Gas, Nonce};
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_crypto::PublicKey;
-use near_primitives_core::contract_context::ContractContext;
+use near_primitives_core::subcontract::ContractContext;
 use near_primitives_core::types::ProtocolVersion;
 use near_schema_checker_lib::ProtocolSchema;
 use std::fmt::{Debug, Display};
@@ -965,7 +965,7 @@ impl Display for ActionErrorKind {
             ActionErrorKind::SubcontractDoesNotExist { contract_context } => {
                 write!(
                     f,
-                    "Subcontract with context {:?} missing and the caller did not set `create_missing_context`",
+                    "Subcontract with context {:?} missing and the caller did not set `create_missing_subcontract`",
                     contract_context
                 )
             }

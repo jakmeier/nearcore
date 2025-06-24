@@ -60,7 +60,8 @@ pub struct AccountV1 {
     locked: Balance,
     /// Hash of the code stored in the storage for this account.
     code_hash: CryptoHash,
-    /// Storage used by the given account, includes account id, this struct, access keys and other data.
+    /// Storage used by the given account, includes account id, this struct,
+    /// access keys, reserved limits for subcontracts, and other data.
     storage_usage: StorageUsage,
 }
 
@@ -145,7 +146,8 @@ pub struct AccountV2 {
     amount: Balance,
     /// The amount locked due to staking.
     locked: Balance,
-    /// Storage used by the given account, includes account id, this struct, access keys and other data.
+    /// Storage used by the given account, includes account id, this struct,
+    /// access keys, reserved limits for subcontracts, and other data.
     storage_usage: StorageUsage,
     /// Type of contract deployed to this account, if any.
     contract: AccountContract,

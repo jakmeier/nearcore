@@ -8,7 +8,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub use chunk_validator_stats::ChunkStats;
 use near_crypto::PublicKey;
 use near_primitives_core::account::GasKey;
-use near_primitives_core::contract_context::{SubcontractPermission, ContractContext};
+use near_primitives_core::subcontract::{ContractContext, SubcontractPermission};
 /// Reexport primitive types
 pub use near_primitives_core::types::*;
 use near_schema_checker_lib::ProtocolSchema;
@@ -498,7 +498,7 @@ impl StateChanges {
                         },
                     ));
                 }
-                TrieKey::SubcontractPermission { account_id, context } => {
+                TrieKey::Subcontract { account_id, context } => {
                     state_changes.extend(changes.into_iter().map(
                         |RawStateChange { cause, data }| {
                             StateChangeWithCause {

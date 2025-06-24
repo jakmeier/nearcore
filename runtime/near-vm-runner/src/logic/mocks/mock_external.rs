@@ -2,8 +2,8 @@ use crate::ContractCode;
 use crate::logic::dependencies::{Result, StorageAccessTracker};
 use crate::logic::types::{GlobalContractDeployMode, GlobalContractIdentifier, ReceiptIndex};
 use crate::logic::{External, ValuePtr};
-use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::hash::{CryptoHash, hash};
+use near_primitives_core::subcontract::ContractContext;
 use near_primitives_core::types::{AccountId, Balance, Gas, GasWeight};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -86,7 +86,7 @@ pub enum MockAction {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
-        create_missing_context: bool,
+        create_missing_subcontract: bool,
     },
 }
 
@@ -361,13 +361,13 @@ impl External for MockedExternal {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
-        create_missing_context: bool,
+        create_missing_subcontract: bool,
     ) {
         self.action_log.push(MockAction::SwitchContext {
             receipt_index,
             caller,
             target,
-            create_missing_context,
+            create_missing_subcontract,
         });
     }
 

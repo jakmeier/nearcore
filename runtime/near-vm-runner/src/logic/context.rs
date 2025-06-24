@@ -1,6 +1,6 @@
 use super::types::{PromiseResult, PublicKey};
 use near_primitives_core::config::ViewConfig;
-use near_primitives_core::contract_context::ContractContext;
+use near_primitives_core::subcontract::ContractContext;
 use near_primitives_core::types::{
     AccountId, Balance, BlockHeight, EpochHeight, Gas, StorageUsage,
 };

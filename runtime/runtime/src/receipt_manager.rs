@@ -7,8 +7,8 @@ use near_primitives::action::{
 use near_primitives::errors::RuntimeError;
 use near_primitives::receipt::DataReceiver;
 use near_primitives_core::account::{AccessKey, AccessKeyPermission, FunctionCallPermission};
-use near_primitives_core::contract_context::ContractContext;
 use near_primitives_core::hash::CryptoHash;
+use near_primitives_core::subcontract::ContractContext;
 use near_primitives_core::types::{AccountId, Balance, Gas, GasWeight, Nonce};
 use near_vm_runner::logic::HostError;
 use near_vm_runner::logic::VMLogicError;
@@ -524,14 +524,14 @@ impl ReceiptManager {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
-        create_missing_context: bool,
+        create_missing_subcontract: bool,
     ) {
         self.append_action(
             receipt_index,
             Action::SwitchContext(Box::new(SwitchContextAction {
                 caller,
                 target,
-                create_missing_context,
+                create_missing_subcontract,
             })),
         );
     }

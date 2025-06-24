@@ -8,7 +8,7 @@ use near_primitives::trie_key::TrieKey;
 use near_primitives::types::{AccountId, Balance, BlockHeight, EpochId, EpochInfoProvider, Gas};
 use near_primitives::utils::create_receipt_id_from_action_hash;
 use near_primitives::version::ProtocolVersion;
-use near_primitives_core::contract_context::ContractContext;
+use near_primitives_core::subcontract::ContractContext;
 use near_store::contract::ContractStorage;
 use near_store::trie::{AccessOptions, AccessTracker};
 use near_store::{KeyLookupMode, TrieUpdate, TrieUpdateValuePtr, has_promise_yield_receipt};
@@ -496,13 +496,13 @@ impl<'a> External for RuntimeExt<'a> {
         receipt_index: ReceiptIndex,
         caller: ContractContext,
         target: ContractContext,
-        create_missing_context: bool,
+        create_missing_subcontract: bool,
     ) {
         self.receipt_manager.append_action_switch_context(
             receipt_index,
             caller,
             target,
-            create_missing_context,
+            create_missing_subcontract,
         );
     }
 

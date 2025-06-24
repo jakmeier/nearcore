@@ -1,7 +1,7 @@
 use crate::parameter::Parameter;
 use enum_map::{EnumMap, enum_map};
 use near_account_id::AccountType;
-use near_primitives_core::types::{Balance, Compute, Gas};
+use near_primitives_core::types::{Balance, Compute, Gas, StorageUsage};
 use near_primitives_core::version::{PROTOCOL_VERSION, ProtocolFeature};
 use near_schema_checker_lib::ProtocolSchema;
 use num_rational::Rational32;
@@ -645,6 +645,22 @@ impl StorageUsageConfig {
             storage_amount_per_byte: 0,
             global_contract_storage_amount_per_byte: 0,
         }
+    }
+
+    /// Subcontract Zero-balance-account limit
+    ///
+    /// This many bytes are not counted towards the storage requirement of a
+    /// subcontract. It's paid by burning gas on creation, rather than by
+    /// locking a native NEAR token balance.
+    ///
+    /// It must be enough to cover for a limited account with 0 reserved
+    /// balance, to allow zero-balance subcontracts to exist.
+    ///
+    /// Full access modules generally share the limits with the parents but any
+    /// amount of bytes below the ZBA limit is free.
+    pub fn subcontract_zba_limit(&self) -> StorageUsage {
+        // TODO(sharded_contract): Define this by parameter
+        256
     }
 }
 

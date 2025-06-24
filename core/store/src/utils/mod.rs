@@ -17,7 +17,7 @@ use near_primitives::receipt::{
 };
 use near_primitives::trie_key::{TrieKey, trie_key_parsers};
 use near_primitives::types::{AccountId, BlockHeight, Nonce, NonceIndex, StateRoot};
-use near_primitives_core::contract_context::{ContractContext, SubcontractPermission};
+use near_primitives_core::subcontract::{ContractContext, Subcontract};
 use std::io;
 
 /// Reads an object from Trie.
@@ -380,23 +380,20 @@ pub fn set_genesis_height(store_update: &mut StoreUpdate, genesis_height: &Block
         .expect("Borsh cannot fail");
 }
 
-pub fn get_subcontract_permission(
+pub fn get_subcontract(
     trie: &dyn TrieAccess,
     account_id: AccountId,
     context: ContractContext,
-) -> Result<Option<SubcontractPermission>, StorageError> {
-    get(trie, &TrieKey::SubcontractPermission { account_id, context })
+) -> Result<Option<Subcontract>, StorageError> {
+    get(trie, &TrieKey::Subcontract { account_id, context })
 }
 
-// returns how many storage bytes the permission uses
-pub fn set_subcontract_permission(
+pub fn set_subcontract(
     state_update: &mut TrieUpdate,
     account_id: AccountId,
     context: ContractContext,
-    permission: &SubcontractPermission,
-) -> usize {
-    let key = TrieKey::SubcontractPermission { account_id, context };
-    let bytes = key.len() + borsh::object_length(permission).expect("borsh must not fail");
-    set(state_update, key, permission);
-    bytes
+    subcontract: &Subcontract,
+) {
+    let key = TrieKey::Subcontract { account_id, context };
+    set(state_update, key, subcontract);
 }

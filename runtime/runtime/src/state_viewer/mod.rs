@@ -20,7 +20,7 @@ use near_primitives::types::{
 use near_primitives::version::PROTOCOL_VERSION;
 use near_primitives::views::{StateItem, ViewStateResult};
 use near_primitives_core::config::ViewConfig;
-use near_primitives_core::contract_context::{ContractContext, SubcontractPermission};
+use near_primitives_core::subcontract::ContractContext;
 use near_store::{TrieUpdate, get_access_key, get_account};
 use near_vm_runner::logic::{ProtocolVersion, ReturnData};
 use near_vm_runner::{ContractCode, ContractRuntimeCache};
@@ -298,7 +298,7 @@ impl TrieViewer {
             view_config,
             // TODO(sharded_contract): add viewer methods for subcontracts
             ContractContext::Root,
-            &SubcontractPermission::FullAccess,
+            &mut None,
             ContractContext::Root,
         )
         .map_err(|e| errors::CallFunctionError::InternalError { error_message: e.to_string() })?;

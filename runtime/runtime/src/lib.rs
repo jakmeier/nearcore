@@ -58,7 +58,7 @@ use near_primitives::utils::{
 };
 use near_primitives::version::ProtocolVersion;
 use near_primitives_core::apply::ApplyChunkReason;
-use near_primitives_core::contract_context::{ContractContext, SubcontractPermission};
+use near_primitives_core::subcontract::{ContractContext, Subcontract};
 use near_store::trie::AccessOptions;
 use near_store::trie::receipts_column_helper::DelayedReceiptQueue;
 use near_store::trie::update::TrieUpdateResult;
@@ -441,7 +441,7 @@ impl Runtime {
         account: &mut Option<Account>,
         actor_id: &mut AccountId,
         actor_contract_context: &mut ContractContext,
-        actor_subcontract_permission: &mut SubcontractPermission,
+        actor_subcontract: &mut Option<Subcontract>,
         predecessor_contract_context: &mut ContractContext,
         receipt: &Receipt,
         action_receipt: &ActionReceipt,
@@ -545,7 +545,7 @@ impl Runtime {
                     apply_state,
                     account,
                     actor_contract_context.clone(),
-                    actor_subcontract_permission,
+                    actor_subcontract,
                     predecessor_contract_context.clone(),
                     receipt,
                     action_receipt,
@@ -643,7 +643,7 @@ impl Runtime {
                     account.as_mut().expect(EXPECT_ACCOUNT_EXISTS),
                     account_id,
                     actor_contract_context,
-                    actor_subcontract_permission,
+                    actor_subcontract,
                     predecessor_contract_context,
                     action,
                     &mut result,
@@ -707,8 +707,8 @@ impl Runtime {
 
         let mut account = get_account(state_update, account_id)?;
         let mut actor_id = receipt.predecessor_id().clone();
+        let mut actor_subcontract = None;
         let mut actor_contract_context = ContractContext::Root;
-        let mut actor_contract_permission = SubcontractPermission::FullAccess;
         let mut predecessor_contract_context = ContractContext::Root;
         let mut result = ActionResult::default();
         let exec_fees = apply_state.config.fees.fee(ActionCosts::new_action_receipt).exec_fee();
@@ -734,7 +734,7 @@ impl Runtime {
                 &mut account,
                 &mut actor_id,
                 &mut actor_contract_context,
-                &mut actor_contract_permission,
+                &mut actor_subcontract,
                 &mut predecessor_contract_context,
                 receipt,
                 action_receipt,

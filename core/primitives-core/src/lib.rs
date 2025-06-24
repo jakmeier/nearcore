@@ -8,9 +8,9 @@ pub mod apply;
 pub mod chains;
 pub mod code;
 pub mod config;
-pub mod contract_context;
 pub mod hash;
 pub mod serialize;
+pub mod subcontract;
 pub mod types;
 pub mod version;
 

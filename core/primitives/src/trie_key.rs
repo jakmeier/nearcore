@@ -2,7 +2,7 @@ use crate::types::AccountId;
 use crate::{action::GlobalContractIdentifier, hash::CryptoHash};
 use borsh::{BorshDeserialize, BorshSerialize, to_vec};
 use near_crypto::PublicKey;
-use near_primitives_core::contract_context::ContractContext;
+use near_primitives_core::subcontract::ContractContext;
 use near_primitives_core::types::{NonceIndex, ShardId};
 use near_schema_checker_lib::ProtocolSchema;
 use std::mem::size_of;
@@ -70,17 +70,16 @@ pub mod col {
     /// Gas key is used to store the gas key or a single nonce ID for the gas key.
     /// If index is None, the value is of type `GasKey`; otherwise it is of type u64.
     pub const GAS_KEY: u8 = 19;
-    /// Namespaced contract data as accessible by WASM running in a subcontract
-    /// context.
+    /// Meta data for a subcontract, analogue to `ACCOUNT` but for subcontracts.
+    /// (`Subcontract`)
+    pub const SUBCONTRACT: u8 = 20;
+    /// Namespaced contract data by subcontracts, analogue to `CONTRACT_DATA` but for subcontracts.
     /// (`Vec<u8>`)
-    pub const SUBCONTRACT_DATA: u8 = 20;
-    /// Permission level of a subcontract.
-    /// (`SubcontractPermission`)
-    pub const SUBCONTRACT_PERMISSION: u8 = 21;
+    pub const SUBCONTRACT_DATA: u8 = 21;
 
     /// All columns except those used for the delayed receipts queue, the yielded promises
     /// queue, and the outgoing receipts buffer, which are global state for the shard.
-    pub const COLUMNS_WITH_ACCOUNT_ID_IN_KEY: [(u8, &str); 10] = [
+    pub const COLUMNS_WITH_ACCOUNT_ID_IN_KEY: [(u8, &str); 12] = [
         (ACCOUNT, "Account"),
         (CONTRACT_CODE, "ContractCode"),
         (ACCESS_KEY, "AccessKey"),
@@ -91,9 +90,11 @@ pub mod col {
         (CONTRACT_DATA, "ContractData"),
         (PROMISE_YIELD_RECEIPT, "PromiseYieldReceipt"),
         (GAS_KEY, "GasKey"),
+        (SUBCONTRACT, "Subcontract"),
+        (SUBCONTRACT_DATA, "SubcontractData"),
     ];
 
-    pub const ALL_COLUMNS_WITH_NAMES: [(u8, &'static str); 19] = [
+    pub const ALL_COLUMNS_WITH_NAMES: [(u8, &'static str); 21] = [
         (ACCOUNT, "Account"),
         (CONTRACT_CODE, "ContractCode"),
         (ACCESS_KEY, "AccessKey"),
@@ -113,6 +114,8 @@ pub mod col {
         (BUFFERED_RECEIPT_GROUPS_QUEUE_ITEM, "BufferedReceiptGroupsQueueItem"),
         (GLOBAL_CONTRACT_CODE, "GlobalContractCode"),
         (GAS_KEY, "GasKey"),
+        (SUBCONTRACT, "Subcontract"),
+        (SUBCONTRACT_DATA, "SubcontractData"),
     ];
 }
 
@@ -256,9 +259,9 @@ pub enum TrieKey {
         public_key: PublicKey,
         index: Option<NonceIndex>,
     },
-    /// Stores permissions for subcontracts.
-    /// Values are of type `SubcontractPermission`.
-    SubcontractPermission {
+    /// Stores permissions and other meta data for subcontracts.
+    /// Values are of type `Subcontract`.
+    Subcontract {
         account_id: AccountId,
         context: ContractContext,
     },
@@ -372,8 +375,8 @@ impl TrieKey {
                     + ACCOUNT_DATA_SEPARATOR.len()
                     + key.len()
             }
-            TrieKey::SubcontractPermission { account_id, context } => {
-                col::SUBCONTRACT_PERMISSION.len()
+            TrieKey::Subcontract { account_id, context } => {
+                col::SUBCONTRACT.len()
                     + account_id.len()
                     + CONTRACT_CONTEXT_SEPARATOR.len()
                     + borsh::object_length(context).unwrap()
@@ -482,6 +485,12 @@ impl TrieKey {
                 buf.extend(borsh::to_vec(&public_key).unwrap());
                 buf.extend(borsh::to_vec(&index).unwrap());
             }
+            TrieKey::Subcontract { account_id, context } => {
+                buf.push(col::SUBCONTRACT);
+                buf.extend(account_id.as_bytes());
+                buf.push(CONTRACT_CONTEXT_SEPARATOR);
+                buf.extend(borsh::to_vec(&context).unwrap());
+            }
             TrieKey::SubcontractData { account_id, context, key } => {
                 buf.push(col::SUBCONTRACT_DATA);
                 buf.extend(account_id.as_bytes());
@@ -489,12 +498,6 @@ impl TrieKey {
                 buf.extend(borsh::to_vec(&context).unwrap());
                 buf.push(ACCOUNT_DATA_SEPARATOR);
                 buf.extend(key);
-            }
-            TrieKey::SubcontractPermission { account_id, context } => {
-                buf.push(col::SUBCONTRACT_PERMISSION);
-                buf.extend(account_id.as_bytes());
-                buf.push(CONTRACT_CONTEXT_SEPARATOR);
-                buf.extend(borsh::to_vec(&context).unwrap());
             }
         };
         debug_assert_eq!(expected_len, buf.len() - start_len);
@@ -532,7 +535,7 @@ impl TrieKey {
             TrieKey::GlobalContractCode { .. } => None,
             TrieKey::GasKey { account_id, .. } => Some(account_id.clone()),
             TrieKey::SubcontractData { account_id, .. } => Some(account_id.clone()),
-            TrieKey::SubcontractPermission { account_id, .. } => Some(account_id.clone()),
+            TrieKey::Subcontract { account_id, .. } => Some(account_id.clone()),
         }
     }
 }
@@ -1194,17 +1197,17 @@ mod tests {
 
     #[test]
     fn test_subcontract_permission_key_len() {
-        check_trie_key_len(TrieKey::SubcontractPermission {
+        check_trie_key_len(TrieKey::Subcontract {
             account_id: "near".parse().unwrap(),
             context: ContractContext::Root,
         });
 
-        check_trie_key_len(TrieKey::SubcontractPermission {
+        check_trie_key_len(TrieKey::Subcontract {
             account_id: "alice.near".parse().unwrap(),
             context: ContractContext::ShardedByAccountId { account_id: "tg".parse().unwrap() },
         });
 
-        check_trie_key_len(TrieKey::SubcontractPermission {
+        check_trie_key_len(TrieKey::Subcontract {
             account_id: "a-b.tg".parse().unwrap(),
             context: ContractContext::ShardedByCodeHash { code_hash: CryptoHash::hash_bytes(&[0]) },
         });

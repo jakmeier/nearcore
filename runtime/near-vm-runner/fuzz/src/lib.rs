@@ -1,4 +1,4 @@
-use near_primitives_core::contract_context::ContractContext;
+use near_primitives_core::subcontract::ContractContext;
 use near_vm_runner::ContractCode;
 use near_vm_runner::internal::wasmparser::{Export, ExternalKind, Parser, Payload, TypeDef};
 use near_vm_runner::logic::VMContext;
