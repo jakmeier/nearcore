@@ -58,8 +58,7 @@ pub(crate) fn execute_function_call(
     is_last_action: bool,
     view_config: Option<ViewConfig>,
     current_contract_context: ContractContext,
-    // TODO(sharded_contract): probably pass this down to `VMContext`
-    _current_contract: &mut Option<Subcontract>,
+    current_subcontract: &Option<Subcontract>,
     predecessor_contract_context: ContractContext,
 ) -> Result<VMOutcome, RuntimeError> {
     let account_id = runtime_ext.account_id().clone();
@@ -73,7 +72,7 @@ pub(crate) fn execute_function_call(
 
     let random_seed =
         near_primitives::utils::create_random_seed(*action_hash, apply_state.random_seed);
-    let context = VMContext {
+    let mut context = VMContext {
         current_account_id: runtime_ext.account_id().clone(),
         current_contract_context,
         signer_account_id: action_receipt.signer_id.clone(),
@@ -86,11 +85,8 @@ pub(crate) fn execute_function_call(
         block_height: apply_state.block_height,
         block_timestamp: apply_state.block_timestamp,
         epoch_height: apply_state.epoch_height,
-        // TODO(sharded_contract): Should this show 0 for limited contracts?
         account_balance: runtime_ext.account().amount(),
-        // TODO(sharded_contract): Should this show be subcontract usage only?
         account_locked_balance: runtime_ext.account().locked(),
-        // TODO(sharded_contract): Should this show be subcontract usage only?
         storage_usage: runtime_ext.account().storage_usage(),
         attached_deposit: function_call.deposit,
         prepaid_gas: function_call.gas,
@@ -98,6 +94,19 @@ pub(crate) fn execute_function_call(
         view_config,
         output_data_receivers,
     };
+
+    if let Some(subcontract) = current_subcontract {
+        match subcontract.permission() {
+            SubcontractPermission::FullAccess => {
+                context.storage_usage = subcontract.storage_usage();
+            }
+            SubcontractPermission::Limited { .. } => {
+                context.account_balance = 0;
+                context.account_locked_balance = 0;
+                context.storage_usage = subcontract.storage_usage();
+            }
+        }
+    }
 
     near_vm_runner::reset_metrics();
     let result = near_vm_runner::run(contract, runtime_ext, &context, Arc::clone(&config.fees));
@@ -182,7 +191,7 @@ pub(crate) fn action_function_call(
         .into());
     }
 
-    let account_contract = account.contract();
+    let account_contract = account.contract_or_subcontract(&actor_contract_context);
     state_update.record_contract_call(
         account_id.clone(),
         code_hash,
@@ -348,8 +357,31 @@ pub(crate) fn action_function_call(
             set_promise_yield_indices(state_update, &promise_yield_indices);
         }
 
-        account.set_amount(outcome.balance);
-        account.set_storage_usage(outcome.storage_usage);
+        // TODO:(sharded_contract) clean up this mess
+        if let Some(subcontract) = actor_subcontract {
+            let prev_subcontract_storage_usage = subcontract.storage_usage();
+            let prev_account_storage_usage = account.storage_usage();
+            subcontract.set_storage_usage(outcome.storage_usage);
+            // TODO:(sharded_contract) safe math
+            account.set_storage_usage(
+                prev_account_storage_usage + outcome.storage_usage - prev_subcontract_storage_usage,
+            );
+            match subcontract.permission() {
+                SubcontractPermission::FullAccess => {
+                    account.set_amount(outcome.balance);
+                }
+                SubcontractPermission::Limited { .. } => {
+                    subcontract.set_storage_usage(outcome.storage_usage);
+                    assert_eq!(outcome.balance, 0);
+                }
+            }
+        } else {
+            account.set_amount(outcome.balance);
+            account.set_storage_usage(outcome.storage_usage);
+        }
+
+        // TODO:(sharded_contract) here or somewhere else: validate outgoing
+        // receipts respect the actor permissions
         result.result = Ok(outcome.return_data);
         result.new_receipts.extend(new_receipts);
     }

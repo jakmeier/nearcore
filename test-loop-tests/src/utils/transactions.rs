@@ -16,7 +16,10 @@ use near_chain::Error;
 use near_client::{Client, ProcessTxResponse, RpcHandler};
 use near_crypto::Signer;
 use near_network::client::ProcessTxRequest;
-use near_primitives::action::{GlobalContractDeployMode, GlobalContractIdentifier};
+use near_primitives::action::{
+    Action, FunctionCallAction, GlobalContractDeployMode, GlobalContractIdentifier,
+    SwitchContextAction,
+};
 use near_primitives::block::Tip;
 use near_primitives::errors::InvalidTxError;
 use near_primitives::hash::CryptoHash;
@@ -26,6 +29,7 @@ use near_primitives::types::{AccountId, BlockHeight};
 use near_primitives::views::{
     FinalExecutionOutcomeView, FinalExecutionStatus, QueryRequest, QueryResponseKind,
 };
+use near_primitives_core::subcontract::{ContractContext, SubcontractPermission};
 use parking_lot::Mutex;
 
 use crate::setup::env::TestLoopEnv;
@@ -206,6 +210,28 @@ pub fn do_deploy_contract(
     check_txs(&env.test_loop.data, &env.node_datas, rpc_id, &[tx]);
 }
 
+pub fn do_deploy_global_contract(
+    env: &mut TestLoopEnv,
+    rpc_id: &AccountId,
+    contract_id: &AccountId,
+    code: Vec<u8>,
+    deploy_mode: GlobalContractDeployMode,
+) {
+    tracing::info!(target: "test", "Deploying contract.");
+    let nonce = get_next_nonce(&env.test_loop.data, &env.node_datas, contract_id);
+    let tx = deploy_global_contract(
+        &mut env.test_loop,
+        &env.node_datas,
+        rpc_id,
+        contract_id.clone(),
+        code,
+        nonce,
+        deploy_mode,
+    );
+    env.test_loop.run_for(Duration::seconds(2));
+    check_txs(&env.test_loop.data, &env.node_datas, rpc_id, &[tx]);
+}
+
 pub fn do_call_contract(
     env: &mut TestLoopEnv,
     rpc_id: &AccountId,
@@ -226,6 +252,50 @@ pub fn do_call_contract(
         args,
         nonce,
     );
+    env.test_loop.run_for(Duration::seconds(2));
+    check_txs(&env.test_loop.data, &env.node_datas, rpc_id, &[tx]);
+}
+
+pub fn do_call_contract_with_context(
+    env: &mut TestLoopEnv,
+    rpc_id: &AccountId,
+    sender_id: &AccountId,
+    contract_id: &AccountId,
+    method_name: String,
+    args: Vec<u8>,
+    subcontract: ContractContext,
+    create_missing_subcontract: bool,
+) {
+    tracing::info!(target: "test", "Calling contract.");
+    let nonce = get_next_nonce(&env.test_loop.data, &env.node_datas, contract_id);
+    let tx = call_contract_with_context(
+        &mut env.test_loop,
+        &env.node_datas,
+        rpc_id,
+        sender_id,
+        contract_id,
+        method_name,
+        args,
+        nonce,
+        subcontract,
+        create_missing_subcontract,
+    );
+    env.test_loop.run_for(Duration::seconds(2));
+    check_txs(&env.test_loop.data, &env.node_datas, rpc_id, &[tx]);
+}
+
+pub fn do_create_sharded_subcontract(
+    env: &mut TestLoopEnv,
+    rpc_id: &AccountId,
+    account_id: &AccountId,
+    code_identifier: &GlobalContractIdentifier,
+    permission: &SubcontractPermission,
+) {
+    tracing::info!(target: "test", "Calling contract.");
+    let nonce = get_next_nonce(&env.test_loop.data, &env.node_datas, account_id);
+    let tx =
+        create_sharded_subcontract(env, rpc_id, account_id, code_identifier, permission, nonce);
+
     env.test_loop.run_for(Duration::seconds(2));
     check_txs(&env.test_loop.data, &env.node_datas, rpc_id, &[tx]);
 }
@@ -403,6 +473,83 @@ pub fn call_contract(
     let tx_hash = tx.get_hash();
     submit_tx(node_datas, rpc_id, tx);
     tracing::debug!(target: "test", ?sender_id, ?contract_id, ?tx_hash, "called contract");
+    tx_hash
+}
+
+pub fn call_contract_with_context(
+    test_loop: &TestLoopV2,
+    node_datas: &[NodeExecutionData],
+    rpc_id: &AccountId,
+    sender_id: &AccountId,
+    contract_id: &AccountId,
+    method_name: String,
+    args: Vec<u8>,
+    nonce: u64,
+    subcontract: ContractContext,
+    create_missing_subcontract: bool,
+) -> CryptoHash {
+    let block_hash = get_shared_block_hash(node_datas, &test_loop.data);
+    let signer = create_user_test_signer(sender_id);
+    let gas = 30 * TGAS;
+    let deposit = 0;
+
+    let actions = vec![
+        Action::SwitchContext(Box::new(SwitchContextAction {
+            caller: ContractContext::Root,
+            target: subcontract,
+            create_missing_subcontract,
+        })),
+        Action::FunctionCall(Box::new(FunctionCallAction { args, method_name, gas, deposit })),
+    ];
+
+    let tx = SignedTransaction::from_actions(
+        nonce,
+        sender_id.clone(),
+        contract_id.clone(),
+        &signer,
+        actions,
+        block_hash,
+        0,
+    );
+
+    let tx_hash = tx.get_hash();
+    submit_tx(node_datas, rpc_id, tx);
+    tracing::debug!(target: "test", ?sender_id, ?contract_id, ?tx_hash, "called contract");
+    tx_hash
+}
+
+pub fn create_sharded_subcontract(
+    env: &TestLoopEnv,
+    rpc_id: &AccountId,
+    originator: &AccountId,
+    code_identifier: &GlobalContractIdentifier,
+    permission: &SubcontractPermission,
+    nonce: u64,
+) -> CryptoHash {
+    let block_hash = get_shared_block_hash(&env.node_datas, &env.test_loop.data);
+    let signer = create_user_test_signer(&originator);
+
+    let context = match code_identifier.clone() {
+        GlobalContractIdentifier::CodeHash(code_hash) => {
+            ContractContext::ShardedByCodeHash { code_hash }
+        }
+        GlobalContractIdentifier::AccountId(account_id) => {
+            ContractContext::ShardedByAccountId { account_id }
+        }
+    };
+
+    let tx = SignedTransaction::set_sharded_subcontract_permission(
+        nonce,
+        &signer.get_account_id(),
+        &signer,
+        block_hash,
+        context,
+        permission.clone(),
+    );
+
+    let tx_hash = tx.get_hash();
+    submit_tx(&env.node_datas, rpc_id, tx);
+    tracing::debug!(target: "test", ?originator, ?code_identifier, ?permission, ?tx_hash, "created sharded subcontract");
     tx_hash
 }
 

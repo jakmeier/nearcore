@@ -13,6 +13,7 @@ use near_primitives::hash::CryptoHash;
 use near_primitives::receipt::{Receipt, ReceiptEnum};
 use near_primitives::trie_key::{GlobalContractCodeIdentifier, TrieKey};
 use near_primitives::types::{AccountId, Gas};
+use near_primitives_core::subcontract::ContractContext;
 use near_store::contract::ContractStorage;
 use near_store::trie::AccessOptions;
 use near_store::{KeyLookupMode, TrieUpdate, get_pure};
@@ -132,6 +133,7 @@ impl ReceiptPreparationPipeline {
         };
         let mut any_function_calls = false;
         let mut account = None;
+        let mut contract_context = ContractContext::Root;
         for (action_index, action) in actions.iter().enumerate() {
             let account_id = account_id.clone();
             match action {
@@ -155,7 +157,9 @@ impl ReceiptPreparationPipeline {
                         };
                         account.insert(receiver)
                     };
-                    let code_hash = match account.contract().as_ref() {
+
+                    let contract = account.contract_or_subcontract(&contract_context);
+                    let code_hash = match contract.as_ref() {
                         AccountContract::None => continue,
                         AccountContract::Local(code_hash) => *code_hash,
                         AccountContract::Global(global_code_hash) => {
@@ -234,6 +238,9 @@ impl ReceiptPreparationPipeline {
                     });
                     any_function_calls = true;
                 }
+                Action::SwitchContext(switch_context_action) => {
+                    contract_context = switch_context_action.target.clone();
+                }
                 // No need to handle this receipt as it only generates other new receipts.
                 Action::Delegate(_) => {}
                 // No handling for these.
@@ -245,8 +252,7 @@ impl ReceiptPreparationPipeline {
                 | Action::DeleteAccount(_)
                 | Action::DeployGlobalContract(_) => {}
                 // TODO(sharded_contract): consider pipelining consequences
-                Action::SetSubcontractPermission(_set_context_permission_action) => todo!(),
-                Action::SwitchContext(_switch_context_action) => todo!(),
+                Action::SetSubcontractPermission(_set_context_permission_action) => (),
             }
         }
         return any_function_calls;

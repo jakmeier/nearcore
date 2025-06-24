@@ -1,5 +1,6 @@
 use crate::hash::CryptoHash;
 use crate::serialize::dec_format;
+use crate::subcontract::ContractContext;
 use crate::types::{Balance, Nonce, NonceIndex, StorageUsage};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use near_account_id as id;
@@ -205,6 +206,22 @@ impl Account {
                 Cow::Owned(AccountContract::from_local_code_hash(account.code_hash))
             }
             Self::V2(account) => Cow::Borrowed(&account.contract),
+        }
+    }
+
+    #[inline]
+    pub fn contract_or_subcontract(
+        &self,
+        contract_context: &ContractContext,
+    ) -> Cow<AccountContract> {
+        match &contract_context {
+            ContractContext::Root => self.contract(),
+            ContractContext::ShardedByAccountId { account_id } => {
+                Cow::Owned(AccountContract::GlobalByAccount(account_id.clone()))
+            }
+            ContractContext::ShardedByCodeHash { code_hash } => {
+                Cow::Owned(AccountContract::Global(code_hash.clone()))
+            }
         }
     }
 

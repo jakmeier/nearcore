@@ -1,7 +1,7 @@
 use crate::account::{AccessKey, AccessKeyPermission, Account};
 use crate::action::{
     DeployGlobalContractAction, GlobalContractDeployMode, GlobalContractIdentifier,
-    UseGlobalContractAction,
+    SetSubcontractPermissionAction, UseGlobalContractAction,
 };
 use crate::block::Block;
 use crate::block_body::{BlockBody, ChunkEndorsementSignatures};
@@ -23,6 +23,7 @@ use crate::views::{ExecutionStatusView, FinalExecutionOutcomeView, FinalExecutio
 use near_crypto::vrf::Value;
 use near_crypto::{EmptySigner, PublicKey, SecretKey, Signature, Signer};
 use near_primitives_core::account::AccountContract;
+use near_primitives_core::subcontract::{ContractContext, SubcontractPermission};
 use near_primitives_core::types::{BlockHeight, MerkleHash, ProtocolVersion};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -344,6 +345,31 @@ impl SignedTransaction {
                 Action::Transfer(TransferAction { deposit: amount }),
                 Action::DeployContract(DeployContractAction { code }),
             ],
+            block_hash,
+            0,
+        )
+    }
+
+    pub fn set_sharded_subcontract_permission(
+        nonce: Nonce,
+        account_id: &AccountId,
+        signer: &Signer,
+        block_hash: CryptoHash,
+        context: ContractContext,
+        permission: SubcontractPermission,
+    ) -> Self {
+        let signer_id = account_id.clone();
+        let receiver_id = account_id.clone();
+
+        Self::from_actions(
+            nonce,
+            signer_id,
+            receiver_id,
+            signer,
+            vec![Action::SetSubcontractPermission(Box::new(SetSubcontractPermissionAction {
+                context,
+                permission,
+            }))],
             block_hash,
             0,
         )

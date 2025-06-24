@@ -534,7 +534,7 @@ impl Runtime {
             }
             Action::FunctionCall(function_call) => {
                 let account = account.as_mut().expect(EXPECT_ACCOUNT_EXISTS);
-                let account_contract = account.contract();
+                let account_contract = account.contract_or_subcontract(&actor_contract_context);
                 let code_hash =
                     state_update.get_account_contract_hash(account_contract.as_ref())?;
                 let contract =

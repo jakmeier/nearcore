@@ -145,8 +145,8 @@ pub fn total_send_fees(
                         * num_bytes
             }
             // TODO(sharded_contract): add gas costs
-            SetSubcontractPermission(_set_context_permission_action) => todo!(),
-            SwitchContext(_switch_context_action) => todo!(),
+            SetSubcontractPermission(_set_context_permission_action) => 0,
+            SwitchContext(_switch_context_action) => 0,
         };
         result = safe_add_gas(result, delta)?;
     }
@@ -239,8 +239,8 @@ pub fn exec_fee(config: &RuntimeConfig, action: &Action, receiver_id: &AccountId
                 + fees.fee(ActionCosts::use_global_contract_byte).exec_fee() * num_bytes
         }
         // TODO(sharded_contract): add gas costs
-        SetSubcontractPermission(_set_context_permission_action) => todo!(),
-        SwitchContext(_switch_context_action) => todo!(),
+        SetSubcontractPermission(_set_context_permission_action) => 0,
+        SwitchContext(_switch_context_action) => 0,
     }
 }
 

@@ -28,5 +28,6 @@ mod resharding_v3;
 mod single_shard_tracking;
 mod spice;
 mod state_sync;
+mod subcontract;
 mod syncing;
 mod view_requests_to_archival_node;

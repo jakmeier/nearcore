@@ -65,6 +65,7 @@ pub enum StateRecord {
     GasKey { account_id: AccountId, public_key: PublicKey, gas_key: GasKey },
     /// Nonce for a gas key index.
     GasKeyNonce { account_id: AccountId, public_key: PublicKey, index: NonceIndex, nonce: Nonce },
+    // TODO(sharded_contract): new columns
 }
 
 impl StateRecord {
@@ -141,6 +142,7 @@ impl StateRecord {
                     receipt: Box::new(receipt),
                 }))
             }
+            // TODO(sharded_contract): new columns
             _ => {
                 println!("key[0]: {} is unreachable", key[0]);
                 None

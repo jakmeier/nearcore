@@ -142,7 +142,7 @@ impl Subcontract {
         self.storage_usage().saturating_sub(subcontract_zba_limit)
     }
 
-    fn set_storage_usage(&mut self, usage: StorageUsage) {
+    pub fn set_storage_usage(&mut self, usage: StorageUsage) {
         match self {
             Subcontract::V1(subcontract) => subcontract.storage_usage = usage,
         }

@@ -46,14 +46,12 @@ pub struct ExecutionResultState {
     /// Keeping track of the current account balance, which can decrease when we create promises
     /// and attach balance to them.
     ///
-    /// TODO(sharded_contract):
     /// When running in a subcontract's context, this is the accessible amount.
     /// For full access modules, this is the same as the main account balance.
     /// For limited modules, this is 0.
     current_account_balance: Balance,
     /// Storage usage of the current account at the moment
     ///
-    /// TODO(sharded_contract):
     /// When running in a subcontract's context, this is the usage of just the
     /// subcontract's isolated space. Even for full access subcontracts.
     current_storage_usage: StorageUsage,
