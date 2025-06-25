@@ -29,6 +29,7 @@ pub struct RuntimeExt<'a> {
     pub(crate) trie_update: &'a mut TrieUpdate,
     pub(crate) receipt_manager: &'a mut ReceiptManager,
     account_id: AccountId,
+    contract_context: ContractContext,
     account: Account,
     action_hash: CryptoHash,
     data_count: u64,
@@ -87,6 +88,7 @@ impl<'a> RuntimeExt<'a> {
         receipt_manager: &'a mut ReceiptManager,
         account_id: AccountId,
         account: Account,
+        contract_context: ContractContext,
         action_hash: CryptoHash,
         epoch_id: EpochId,
         last_block_hash: CryptoHash,
@@ -100,6 +102,7 @@ impl<'a> RuntimeExt<'a> {
             trie_update,
             receipt_manager,
             account_id,
+            contract_context,
             account,
             action_hash,
             data_count: 0,
@@ -127,7 +130,16 @@ impl<'a> RuntimeExt<'a> {
     }
 
     pub fn create_storage_key(&self, key: &[u8]) -> TrieKey {
-        TrieKey::ContractData { account_id: self.account_id.clone(), key: key.to_vec() }
+        match &self.contract_context {
+            ContractContext::Root => {
+                TrieKey::ContractData { account_id: self.account_id.clone(), key: key.to_vec() }
+            }
+            other_context => TrieKey::SubcontractData {
+                account_id: self.account_id.clone(),
+                context: other_context.clone(),
+                key: key.to_vec(),
+            },
+        }
     }
 
     #[inline]

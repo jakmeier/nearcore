@@ -275,6 +275,8 @@ impl TrieViewer {
             &mut receipt_manager,
             contract_id.clone(),
             account,
+            // TODO(sharded_contract): state viewer for subcontracts
+            ContractContext::Root,
             empty_hash,
             view_state.epoch_id,
             view_state.block_hash,

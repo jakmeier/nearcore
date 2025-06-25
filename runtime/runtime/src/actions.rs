@@ -208,6 +208,7 @@ pub(crate) fn action_function_call(
         &mut receipt_manager,
         account_id.clone(),
         account.clone(),
+        actor_contract_context.clone(),
         *action_hash,
         apply_state.epoch_id,
         apply_state.block_hash,
@@ -229,7 +230,7 @@ pub(crate) fn action_function_call(
         config,
         is_last_action,
         None,
-        actor_contract_context,
+        actor_contract_context, // todo(sharded_contract): remove? It's already in runtimeExt
         actor_subcontract,
         predecessor_contract_context,
     )?;
