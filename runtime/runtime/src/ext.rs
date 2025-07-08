@@ -509,12 +509,14 @@ impl<'a> External for RuntimeExt<'a> {
         caller: ContractContext,
         target: ContractContext,
         create_missing_subcontract: bool,
+        added_storage_balance: Balance,
     ) {
         self.receipt_manager.append_action_switch_context(
             receipt_index,
             caller,
             target,
             create_missing_subcontract,
+            added_storage_balance,
         );
     }
 

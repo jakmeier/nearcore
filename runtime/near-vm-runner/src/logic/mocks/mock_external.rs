@@ -87,6 +87,7 @@ pub enum MockAction {
         caller: ContractContext,
         target: ContractContext,
         create_missing_subcontract: bool,
+        added_storage_balance: Balance,
     },
 }
 
@@ -362,12 +363,14 @@ impl External for MockedExternal {
         caller: ContractContext,
         target: ContractContext,
         create_missing_subcontract: bool,
+        added_storage_balance: Balance,
     ) {
         self.action_log.push(MockAction::SwitchContext {
             receipt_index,
             caller,
             target,
             create_missing_subcontract,
+            added_storage_balance,
         });
     }
 

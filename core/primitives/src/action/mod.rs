@@ -339,6 +339,7 @@ pub struct SwitchContextAction {
     pub caller: ContractContext,
     pub target: ContractContext,
     pub create_missing_subcontract: bool,
+    pub added_storage_balance: Balance,
 }
 
 #[derive(

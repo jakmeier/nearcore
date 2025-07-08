@@ -104,6 +104,7 @@ fn create_subcontract_by_account_id() {
         &user.account_shard_1,
         &GlobalContractIdentifier::AccountId(user.account_3.clone()),
         &SubcontractPermission::FullAccess,
+        ONE_NEAR,
     );
 
     user.env.shutdown_and_drain_remaining_events(Duration::seconds(10));
@@ -128,9 +129,12 @@ fn call_subcontract_by_account_id() {
         &user.account_shard_1,
         &GlobalContractIdentifier::AccountId(user.account_3.clone()),
         &SubcontractPermission::FullAccess,
+        ONE_NEAR,
     );
 
     let lazy_creation = false;
+    // TODO: should fail with 0
+    let initial_allowance = 0; //ONE_NEAR;
     do_call_contract_with_context(
         &mut user.env,
         &user.rpc,
@@ -140,6 +144,7 @@ fn call_subcontract_by_account_id() {
         vec![],
         ContractContext::ShardedByAccountId { account_id: user.account_3.clone() },
         lazy_creation,
+        initial_allowance,
     );
 
     // TODO(sharded_contract) test state changes are in subcontract but not in parent
@@ -161,6 +166,8 @@ fn call_subcontract_by_account_id_create_lazily() {
     );
 
     let lazy_creation = true;
+    // TODO: should fail with 0
+    let initial_allowance = 0; //ONE_NEAR;
     do_call_contract_with_context(
         &mut user.env,
         &user.rpc,
@@ -170,6 +177,7 @@ fn call_subcontract_by_account_id_create_lazily() {
         vec![],
         ContractContext::ShardedByAccountId { account_id: user.account_3.clone() },
         lazy_creation,
+        initial_allowance,
     );
 
     // TODO(sharded_contract) test state changes are in subcontract but not in parent

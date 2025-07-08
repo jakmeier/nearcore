@@ -280,6 +280,8 @@ pub enum HostError {
     ContractCodeHashMalformed,
     /// VM Logic returned an invalid ContractContext
     InvalidContractContext,
+    /// SwitchContext action was created with non-zero storage balance to a root context
+    CannotAddStorageToRoot,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -525,6 +527,7 @@ impl std::fmt::Display for HostError {
             ),
             ContractCodeHashMalformed => write!(f, "contract code hash is malformed"),
             InvalidContractContext => write!(f, "invalid contract context"),
+            CannotAddStorageToRoot => write!(f, "adding subconract storage to root is not allowed"),
         }
     }
 }

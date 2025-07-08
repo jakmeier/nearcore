@@ -1325,6 +1325,7 @@ pub enum ActionView {
         caller: ContractContextView,
         target: ContractContextView,
         create_missing_subcontract: bool,
+        added_storage_balance: Balance,
     },
 }
 
@@ -1383,6 +1384,7 @@ impl From<Action> for ActionView {
                 caller: action.caller.into(),
                 target: action.target.into(),
                 create_missing_subcontract: action.create_missing_subcontract,
+                added_storage_balance: action.added_storage_balance,
             },
         }
     }
@@ -1449,13 +1451,17 @@ impl TryFrom<ActionView> for Action {
                     permission: permission.into(),
                 }))
             }
-            ActionView::SwitchContext { caller, target, create_missing_subcontract } => {
-                Action::SwitchContext(Box::new(SwitchContextAction {
-                    caller: caller.into(),
-                    target: target.into(),
-                    create_missing_subcontract,
-                }))
-            }
+            ActionView::SwitchContext {
+                caller,
+                target,
+                create_missing_subcontract,
+                added_storage_balance,
+            } => Action::SwitchContext(Box::new(SwitchContextAction {
+                caller: caller.into(),
+                target: target.into(),
+                create_missing_subcontract,
+                added_storage_balance,
+            })),
         })
     }
 }
@@ -2857,16 +2863,14 @@ impl From<ContractContextView> for ContractContext {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum SubcontractPermissionView {
     FullAccess,
-    Limited { reserved_balance: Balance },
+    Limited,
 }
 
 impl From<SubcontractPermissionView> for SubcontractPermission {
     fn from(other: SubcontractPermissionView) -> Self {
         match other {
             SubcontractPermissionView::FullAccess => SubcontractPermission::FullAccess,
-            SubcontractPermissionView::Limited { reserved_balance } => {
-                SubcontractPermission::Limited { reserved_balance }
-            }
+            SubcontractPermissionView::Limited => SubcontractPermission::Limited,
         }
     }
 }
@@ -2875,9 +2879,7 @@ impl From<SubcontractPermission> for SubcontractPermissionView {
     fn from(other: SubcontractPermission) -> Self {
         match other {
             SubcontractPermission::FullAccess => SubcontractPermissionView::FullAccess,
-            SubcontractPermission::Limited { reserved_balance } => {
-                SubcontractPermissionView::Limited { reserved_balance }
-            }
+            SubcontractPermission::Limited => SubcontractPermissionView::Limited,
         }
     }
 }

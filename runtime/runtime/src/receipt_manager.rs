@@ -525,6 +525,7 @@ impl ReceiptManager {
         caller: ContractContext,
         target: ContractContext,
         create_missing_subcontract: bool,
+        added_storage_balance: Balance,
     ) {
         self.append_action(
             receipt_index,
@@ -532,6 +533,7 @@ impl ReceiptManager {
                 caller,
                 target,
                 create_missing_subcontract,
+                added_storage_balance,
             })),
         );
     }

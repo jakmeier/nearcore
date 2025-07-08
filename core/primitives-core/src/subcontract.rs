@@ -47,6 +47,8 @@ pub struct SubcontractV1 {
     pub permission: SubcontractPermission,
     /// Number of bytes used in the trie for storing this subcontract.
     pub storage_usage: StorageUsage,
+    /// Amount of NEAR tokens that have been burnt for storage of this subcontract.
+    pub storage_allowance: Balance,
 }
 
 #[derive(
@@ -88,29 +90,28 @@ pub enum ContractContext {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum SubcontractPermission {
     FullAccess,
-    Limited { reserved_balance: Balance },
+    Limited,
+    // Note: When adding structured variants, the storage requirements need to
+    // be recomputed when `SetSubcontractPermissionAction` changes permissions.
 }
 
 impl Subcontract {
     /// Create a subcontract meta data struct with correct storage usage.
-    ///
-    /// Returns `None` if any of the storage related math operations failed.
     pub fn new(
         permission: SubcontractPermission,
         key_size: u64,
         num_extra_bytes_record: StorageUsage,
-        storage_amount_per_byte: Balance,
-    ) -> Option<Self> {
+    ) -> Self {
         let mut this = Subcontract::V1(SubcontractV1 {
             permission,
+            storage_allowance: 0,
             // real value is set right below
             storage_usage: 0,
         });
 
-        let usage =
-            this.compute_storage_usage(key_size, num_extra_bytes_record, storage_amount_per_byte)?;
+        let usage = this.base_storage_usage(key_size, num_extra_bytes_record);
         this.set_storage_usage(usage);
-        Some(this)
+        this
     }
 
     pub fn permission(&self) -> &SubcontractPermission {
@@ -119,27 +120,56 @@ impl Subcontract {
         }
     }
 
+    pub fn set_permission(&mut self, new_permission: SubcontractPermission) {
+        // Note: At the time, all permissions use the same storage amount, no
+        // need to update storage requirements. But let's add a check to ensure
+        // this stays this way.
+        debug_assert_eq!(
+            borsh::object_length(self.permission()).unwrap(),
+            borsh::object_length(&new_permission).unwrap(),
+            "need to handle different permission sizes in storage usage"
+        );
+        match self {
+            Subcontract::V1(subcontract) => {
+                subcontract.permission = new_permission;
+            }
+        }
+    }
+
     /// How much storage is actually used in the trie, including meta data and
     /// contract data.
     ///
-    /// This value is always included in the main account `storage_usage`.
-    /// Tracking it separately is necessary for permissions changes or deletion
-    /// of a submodule.
+    /// This value is not included in the main account `storage_usage`. Tracking
+    /// is done separately for the main account and subcontracts.
     ///
-    /// Note that for limited access subcontracts, the full reserved amount is
-    /// added to the `Account` storage_usage.
-    ///
-    /// To compute the required balance to be locked, the ZBA limit must
-    /// subtracted from this field.
+    /// To compute the required balance to be locked, this number needs to be
+    /// multiplied by `nonrefundable_storage_amount_per_byte`.
     pub fn storage_usage(&self) -> StorageUsage {
         match self {
             Subcontract::V1(subcontract) => subcontract.storage_usage,
         }
     }
 
-    /// How much storage usage needs to be added to the main account for this subcontract.
-    pub fn storage_requirement(&self, subcontract_zba_limit: u64) -> StorageUsage {
-        self.storage_usage().saturating_sub(subcontract_zba_limit)
+    /// How much balance has been burnt to cover nonrefundable storage costs of
+    /// the subcontract.
+    ///
+    /// To compute the allowed bytes, this number needs to be divided by
+    /// `nonrefundable_storage_amount_per_byte`.
+    pub fn storage_allowance(&self) -> Balance {
+        match self {
+            Subcontract::V1(subcontract) => subcontract.storage_allowance,
+        }
+    }
+
+    pub fn add_storage_allowance(&mut self, added: Balance) {
+        match self {
+            Subcontract::V1(subcontract) => {
+                subcontract.storage_allowance = subcontract
+                    .storage_allowance
+                    .checked_add(added)
+                    .expect("can't have more than u128::MAX balance")
+            }
+        }
     }
 
     pub fn set_storage_usage(&mut self, usage: StorageUsage) {
@@ -148,33 +178,15 @@ impl Subcontract {
         }
     }
 
-    fn compute_storage_usage(
-        &self,
-        key_size: u64,
-        num_extra_bytes_record: StorageUsage,
-        storage_amount_per_byte: Balance,
-    ) -> Option<u64> {
-        let data_store_usage = match self.permission() {
-            // full access subcontracts use shared storage limits with parent
-            // hence, they use the actual storage usage
-            SubcontractPermission::FullAccess => self.storage_usage(),
-            SubcontractPermission::Limited { reserved_balance } => {
-                if storage_amount_per_byte == 0 {
-                    // free storage config => no need to lock tokens
-                    0
-                } else {
-                    // limited subcontracts require enough token to be locked for the full reserved amount
-                    reserved_balance
-                        .checked_div(Balance::from(storage_amount_per_byte))
-                        .expect("storage_amount_per_byte is not 0") as u64
-                }
-            }
-        };
+    /// How many bytes are required for storing the subcontract without its WASM
+    /// contract state.
+    fn base_storage_usage(&self, key_size: u64, num_extra_bytes_record: StorageUsage) -> u64 {
         let meta_data_size = borsh::object_length(self).expect("borsh must not fail") as u64;
         let record_overhead = num_extra_bytes_record;
 
-        [data_store_usage, key_size, meta_data_size, record_overhead]
+        [key_size, meta_data_size, record_overhead]
             .iter()
             .try_fold(0u64, |acc, &value| acc.checked_add(value))
+            .expect("storage must not be > u64::MAX")
     }
 }

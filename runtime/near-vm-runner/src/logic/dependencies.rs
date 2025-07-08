@@ -534,6 +534,7 @@ pub trait External {
         caller: ContractContext,
         target: ContractContext,
         create_missing_subcontract: bool,
+        added_storage_balance: Balance,
     );
 
     /// # Panic

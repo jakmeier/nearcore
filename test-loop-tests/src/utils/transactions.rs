@@ -18,14 +18,14 @@ use near_crypto::Signer;
 use near_network::client::ProcessTxRequest;
 use near_primitives::action::{
     Action, FunctionCallAction, GlobalContractDeployMode, GlobalContractIdentifier,
-    SwitchContextAction,
+    SetSubcontractPermissionAction, SwitchContextAction,
 };
 use near_primitives::block::Tip;
 use near_primitives::errors::InvalidTxError;
 use near_primitives::hash::CryptoHash;
 use near_primitives::test_utils::create_user_test_signer;
 use near_primitives::transaction::SignedTransaction;
-use near_primitives::types::{AccountId, BlockHeight};
+use near_primitives::types::{AccountId, Balance, BlockHeight};
 use near_primitives::views::{
     FinalExecutionOutcomeView, FinalExecutionStatus, QueryRequest, QueryResponseKind,
 };
@@ -265,6 +265,7 @@ pub fn do_call_contract_with_context(
     args: Vec<u8>,
     subcontract: ContractContext,
     create_missing_subcontract: bool,
+    added_storage_balance: Balance,
 ) {
     tracing::info!(target: "test", "Calling contract.");
     let nonce = get_next_nonce(&env.test_loop.data, &env.node_datas, contract_id);
@@ -279,6 +280,7 @@ pub fn do_call_contract_with_context(
         nonce,
         subcontract,
         create_missing_subcontract,
+        added_storage_balance,
     );
     env.test_loop.run_for(Duration::seconds(2));
     check_txs(&env.test_loop.data, &env.node_datas, rpc_id, &[tx]);
@@ -290,11 +292,19 @@ pub fn do_create_sharded_subcontract(
     account_id: &AccountId,
     code_identifier: &GlobalContractIdentifier,
     permission: &SubcontractPermission,
+    initial_allowance: Balance,
 ) {
     tracing::info!(target: "test", "Calling contract.");
     let nonce = get_next_nonce(&env.test_loop.data, &env.node_datas, account_id);
-    let tx =
-        create_sharded_subcontract(env, rpc_id, account_id, code_identifier, permission, nonce);
+    let tx = create_sharded_subcontract(
+        env,
+        rpc_id,
+        account_id,
+        code_identifier,
+        permission,
+        initial_allowance,
+        nonce,
+    );
 
     env.test_loop.run_for(Duration::seconds(2));
     check_txs(&env.test_loop.data, &env.node_datas, rpc_id, &[tx]);
@@ -487,6 +497,7 @@ pub fn call_contract_with_context(
     nonce: u64,
     subcontract: ContractContext,
     create_missing_subcontract: bool,
+    added_storage_balance: Balance,
 ) -> CryptoHash {
     let block_hash = get_shared_block_hash(node_datas, &test_loop.data);
     let signer = create_user_test_signer(sender_id);
@@ -498,6 +509,7 @@ pub fn call_contract_with_context(
             caller: ContractContext::Root,
             target: subcontract,
             create_missing_subcontract,
+            added_storage_balance,
         })),
         Action::FunctionCall(Box::new(FunctionCallAction { args, method_name, gas, deposit })),
     ];
@@ -524,6 +536,7 @@ pub fn create_sharded_subcontract(
     originator: &AccountId,
     code_identifier: &GlobalContractIdentifier,
     permission: &SubcontractPermission,
+    initial_allowance: Balance,
     nonce: u64,
 ) -> CryptoHash {
     let block_hash = get_shared_block_hash(&env.node_datas, &env.test_loop.data);
@@ -538,13 +551,38 @@ pub fn create_sharded_subcontract(
         }
     };
 
-    let tx = SignedTransaction::set_sharded_subcontract_permission(
+    let mut actions = vec![Action::SwitchContext(Box::new(SwitchContextAction {
+        caller: ContractContext::Root,
+        target: context.clone(),
+        create_missing_subcontract: true,
+        added_storage_balance: initial_allowance,
+    }))];
+    match permission {
+        SubcontractPermission::FullAccess => {
+            // TODO(smart_contract): can this be done nicer? To create a
+            // full-access module in the same receipt, we have to go back to the
+            // root context.
+            actions.push(Action::SwitchContext(Box::new(SwitchContextAction {
+                caller: context.clone(),
+                target: ContractContext::Root,
+                create_missing_subcontract: true,
+                added_storage_balance: initial_allowance,
+            })));
+            actions.push(Action::SetSubcontractPermission(Box::new(
+                SetSubcontractPermissionAction { context, permission: permission.clone() },
+            )));
+        }
+        SubcontractPermission::Limited => (),
+    }
+
+    let tx = SignedTransaction::from_actions(
         nonce,
-        &signer.get_account_id(),
+        signer.get_account_id(),
+        signer.get_account_id(),
         &signer,
+        actions,
         block_hash,
-        context,
-        permission.clone(),
+        0,
     );
 
     let tx_hash = tx.get_hash();

@@ -32,7 +32,7 @@ use near_primitives_core::subcontract::{ContractContext, Subcontract, Subcontrac
 use near_primitives_core::version::ProtocolFeature;
 use near_store::{
     StorageError, TrieUpdate, enqueue_promise_yield_timeout, get_access_key,
-    get_promise_yield_indices, get_subcontract, remove_access_key, remove_account, set_access_key,
+    get_promise_yield_indices, remove_access_key, remove_account, set_access_key,
     set_promise_yield_indices,
 };
 use near_vm_runner::logic::errors::{
@@ -100,7 +100,7 @@ pub(crate) fn execute_function_call(
             SubcontractPermission::FullAccess => {
                 context.storage_usage = subcontract.storage_usage();
             }
-            SubcontractPermission::Limited { .. } => {
+            SubcontractPermission::Limited => {
                 context.account_balance = 0;
                 context.account_locked_balance = 0;
                 context.storage_usage = subcontract.storage_usage();
@@ -371,7 +371,7 @@ pub(crate) fn action_function_call(
                 SubcontractPermission::FullAccess => {
                     account.set_amount(outcome.balance);
                 }
-                SubcontractPermission::Limited { .. } => {
+                SubcontractPermission::Limited => {
                     subcontract.set_storage_usage(outcome.storage_usage);
                     assert_eq!(outcome.balance, 0);
                 }
@@ -1022,72 +1022,27 @@ fn validate_delegate_action_key(
 }
 
 pub(crate) fn action_set_subcontract_permission(
-    apply_state: &ApplyState,
     state_update: &mut TrieUpdate,
-    account: &mut Account,
     account_id: &AccountId,
     action: &SetSubcontractPermissionAction,
-) -> Result<(), StorageError> {
+    result: &mut ActionResult,
+) -> Result<(), RuntimeError> {
     let SetSubcontractPermissionAction { context, permission } = action;
-    let storage_config = &apply_state.config.fees.storage_usage_config;
-    set_context_permission_impl(
-        state_update,
-        account,
-        account_id,
-        context,
-        permission,
-        storage_config,
-    )?;
+    let key = TrieKey::Subcontract { account_id: account_id.clone(), context: context.clone() };
+
+    match near_store::get::<Subcontract>(state_update, &key)? {
+        Some(mut subcontract) => {
+            subcontract.set_permission(permission.clone());
+            near_store::set(state_update, key, &subcontract);
+        }
+        None => {
+            result.result =
+                Err(ActionErrorKind::SubcontractDoesNotExist { contract_context: context.clone() }
+                    .into());
+        }
+    }
 
     Ok(())
-}
-
-fn set_context_permission_impl(
-    state_update: &mut TrieUpdate,
-    account: &mut Account,
-    account_id: &AccountId,
-    context: &ContractContext,
-    new_permission: &SubcontractPermission,
-    storage_config: &near_parameters::StorageUsageConfig,
-) -> Result<Subcontract, StorageError> {
-    let key = TrieKey::Subcontract { account_id: account_id.clone(), context: context.clone() };
-    let current_subcontract: Option<Subcontract> = near_store::get(state_update, &key)?;
-    let zba_limit = storage_config.subcontract_zba_limit();
-
-    let new_subcontract = Subcontract::new(
-        new_permission.clone(),
-        key.len() as u64,
-        storage_config.num_extra_bytes_record,
-        storage_config.storage_amount_per_byte,
-    )
-    .ok_or_else(|| {
-        StorageError::StorageInconsistentState(format!(
-            "Storage usage integer overflow for subcontract {:?}",
-            key
-        ))
-    })?;
-
-    let added_bytes = new_subcontract.storage_requirement(zba_limit);
-    let removed_bytes = if let Some(removed_subcontract) = current_subcontract {
-        removed_subcontract.storage_requirement(zba_limit)
-    } else {
-        0
-    };
-
-    let new_account_storage_usage = account
-        .storage_usage()
-        .checked_add(added_bytes)
-        .and_then(|usage| usage.checked_sub(removed_bytes))
-        .ok_or_else(|| {
-            StorageError::StorageInconsistentState(format!(
-                "Storage usage integer overflow for context {:?} at account {}",
-                context, account_id
-            ))
-        })?;
-
-    near_store::set(state_update, key, &new_subcontract);
-    account.set_storage_usage(new_account_storage_usage);
-    Ok(new_subcontract)
 }
 
 pub(crate) fn action_switch_context(
@@ -1101,38 +1056,43 @@ pub(crate) fn action_switch_context(
     action: &SwitchContextAction,
     result: &mut ActionResult,
 ) -> Result<(), StorageError> {
-    let SwitchContextAction { caller, target, create_missing_subcontract } = action;
+    let SwitchContextAction { caller, target, create_missing_subcontract, added_storage_balance } =
+        action;
 
     let entered_subcontract = match target {
         ContractContext::Root => None,
         non_root_context => {
+            let key = TrieKey::Subcontract {
+                account_id: account_id.clone(),
+                context: non_root_context.clone(),
+            };
+
             let maybe_subcontract = load_subcontract(
-                non_root_context.clone(),
                 apply_state,
                 state_update,
                 account,
-                account_id,
-                target,
+                &key,
                 *create_missing_subcontract,
             )?;
 
-            match maybe_subcontract {
-                Ok(subcontract) => Some(subcontract),
-                Err(err) => {
-                    result.result = Err(err);
-                    return Ok(());
+            let Some(mut subcontract) = maybe_subcontract else {
+                // Action execution failed and aborts the action receipt execution.
+                // Balance is refunded.
+                result.result = Err(ActionErrorKind::SubcontractDoesNotExist {
+                    contract_context: target.clone(),
                 }
+                .into());
+                return Ok(());
+            };
+
+            if *added_storage_balance > 0 {
+                subcontract.add_storage_allowance(*added_storage_balance);
+                near_store::set(state_update, key, &subcontract);
             }
+
+            Some(subcontract)
         }
     };
-
-    if entered_subcontract.is_none() {
-        // Action execution failed and aborts the action receipt execution.
-        result.result =
-            Err(ActionErrorKind::SubcontractDoesNotExist { contract_context: target.clone() }
-                .into());
-        return Ok(());
-    }
 
     *predecessor_contract_context = caller.clone();
     *actor_subcontract = entered_subcontract;
@@ -1142,42 +1102,32 @@ pub(crate) fn action_switch_context(
 }
 
 fn load_subcontract(
-    non_root_context: ContractContext,
     apply_state: &ApplyState,
     state_update: &mut TrieUpdate,
-    account: &mut Account,
-    account_id: &AccountId,
-    target: &ContractContext,
+    _account: &mut Account,
+    key: &TrieKey,
     lazy_creation: bool,
-) -> Result<Result<Subcontract, ActionError>, StorageError> {
-    let existing_subcontract =
-        get_subcontract(state_update, account_id.clone(), non_root_context.clone())?;
+) -> Result<Option<Subcontract>, StorageError> {
+    let maybe_existing_subcontract = near_store::get(state_update, key)?;
 
-    if existing_subcontract.is_none() && !lazy_creation {
-        // Abort action receipt execution because the caller didn't opt-in for
-        // lazy subcontract creation.
-        return Ok(Err(ActionErrorKind::SubcontractDoesNotExist {
-            contract_context: target.clone(),
+    let subcontract = match (maybe_existing_subcontract, lazy_creation) {
+        (Some(subcontract), _) => Some(subcontract),
+        (None, false) => None,
+        (None, true) => {
+            // Lazy subcontract creation
+            let storage_config = &apply_state.config.fees.storage_usage_config;
+            let created = Subcontract::new(
+                SubcontractPermission::Limited,
+                key.len() as u64,
+                storage_config.num_extra_bytes_record,
+            );
+            near_store::set(state_update, key.clone(), &created);
+            // TODO(sharded_contract): increase number of subcontracts in account
+            Some(created)
         }
-        .into()));
-    }
+    };
 
-    if let Some(existing_subcontract) = existing_subcontract {
-        Ok(Ok(existing_subcontract))
-    } else {
-        // Lazy subcontract creation
-        let storage_config = &apply_state.config.fees.storage_usage_config;
-        let new_permission = SubcontractPermission::Limited { reserved_balance: 0 };
-        let created = set_context_permission_impl(
-            state_update,
-            account,
-            account_id,
-            target,
-            &new_permission,
-            storage_config,
-        )?;
-        Ok(Ok(created))
-    }
+    Ok(subcontract)
 }
 
 pub(crate) fn check_actor_permissions(

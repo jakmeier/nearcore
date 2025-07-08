@@ -17,7 +17,6 @@ use near_primitives::receipt::{
 };
 use near_primitives::trie_key::{TrieKey, trie_key_parsers};
 use near_primitives::types::{AccountId, BlockHeight, Nonce, NonceIndex, StateRoot};
-use near_primitives_core::subcontract::{ContractContext, Subcontract};
 use std::io;
 
 /// Reads an object from Trie.
@@ -378,22 +377,4 @@ pub fn set_genesis_height(store_update: &mut StoreUpdate, genesis_height: &Block
     store_update
         .set_ser::<BlockHeight>(DBCol::BlockMisc, GENESIS_HEIGHT_KEY, genesis_height)
         .expect("Borsh cannot fail");
-}
-
-pub fn get_subcontract(
-    trie: &dyn TrieAccess,
-    account_id: AccountId,
-    context: ContractContext,
-) -> Result<Option<Subcontract>, StorageError> {
-    get(trie, &TrieKey::Subcontract { account_id, context })
-}
-
-pub fn set_subcontract(
-    state_update: &mut TrieUpdate,
-    account_id: AccountId,
-    context: ContractContext,
-    subcontract: &Subcontract,
-) {
-    let key = TrieKey::Subcontract { account_id, context };
-    set(state_update, key, subcontract);
 }

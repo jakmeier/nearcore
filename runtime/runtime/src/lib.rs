@@ -628,13 +628,7 @@ impl Runtime {
                 )?;
             }
             Action::SetSubcontractPermission(action) => {
-                action_set_subcontract_permission(
-                    apply_state,
-                    state_update,
-                    account.as_mut().expect(EXPECT_ACCOUNT_EXISTS),
-                    account_id,
-                    action,
-                )?;
+                action_set_subcontract_permission(state_update, account_id, action, &mut result)?;
             }
             Action::SwitchContext(action) => {
                 action_switch_context(

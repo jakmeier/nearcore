@@ -847,6 +847,10 @@ impl<'a> VMLogic<'a> {
     /// The current balance of the given account. This includes the attached_deposit that was
     /// attached to the transaction.
     ///
+    /// When running in a subcontract's context, this is the accessible amount.
+    /// For full access modules, this is the same as the main account balance.
+    /// For limited modules, this is 0.
+    ///
     /// # Cost
     ///
     /// `base + memory_write_base + memory_write_size * 16`
@@ -860,6 +864,7 @@ impl<'a> VMLogic<'a> {
     }
 
     /// The current amount of tokens locked due to staking.
+    ///
     ///
     /// # Cost
     ///
@@ -2974,8 +2979,8 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
     /// 1: ContractContext::ShardedByAccountId, the register contains an `AccountId`
     /// 2: ContractContext::ShardedByCodeHash, the register contain a `CryptoHash`
     ///
-    /// Unless the type is `Root`, the last two fields point to the data.
-    /// This can be in memory, or in a register.
+    /// Unless the type is `Root`, the last two fields point to the data. This
+    /// can be in memory, or in a register.
     ///
     /// If the data is in memory, set `target_context_len` to data length
     /// measured in bytes and `target_context_ptr` to the raw pointer in guest
@@ -2986,8 +2991,12 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
     ///
     /// If `create_missing_subcontract` is set to true, the subcontract will be
     /// initialized on the target account with limited access permissions, if it
-    /// doesn't already exist. This increases the gas cost of the action to cover
-    /// the module creation, storage, and deletion cost.
+    /// doesn't already exist. This increases the gas cost of the action to
+    /// cover the module creation, storage, and deletion cost.
+    ///
+    /// The amount specified in `added_storage_balance` gets added to the
+    /// receiving subcontract's storage allowance.  It must be 0 if the target
+    /// context is Root.
     ///
     /// # Errors
     ///
@@ -3001,13 +3010,15 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
     ///   `target_context_len` does not parse as `AccountId` , returns
     ///   `InvalidAccountId`.
     /// * If `target_context_type` is 2 and the data at `target_context_ptr` +
-    ///   `target_context_len` is not  , returns
-    ///   `InvalidAccountId`.
+    ///   `target_context_len` is not a valid `CryptoHash`, returns
+    ///   `ContractCodeHashMalformed`.
+    /// * If `target_context_type` is 0 (Root) and `added_storage_balance` is
+    ///   not 0, returns `CannotAddStorageToRoot`.
     /// * If called as view function returns `ProhibitedInView`.
     ///
     /// # Cost
     ///
-    /// TODO(sharded_contract): add gas costs
+    /// TODO: Define exact costs
     pub fn promise_batch_action_switch_context(
         &mut self,
         promise_idx: u64,
@@ -3015,6 +3026,7 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
         target_context_len: u64,
         target_context_ptr: u64,
         create_missing_subcontract: bool,
+        added_storage_balance: u128,
     ) -> Result<()> {
         self.result_state.gas_counter.pay_base(base)?;
         if self.context.is_view() {
@@ -3045,13 +3057,71 @@ bls12381_p2_decompress_base + bls12381_p2_decompress_element * num_elements`
         // TODO(sharded_contract): add gas costs
         // self.pay_action_base(ActionCosts::delete_key, sir)?;
 
+        if added_storage_balance > 0 {
+            if matches!(target_context, ContractContext::Root) {
+                return Err(HostError::CannotAddStorageToRoot.into());
+            }
+            self.result_state.deduct_balance(added_storage_balance)?;
+        }
+
         self.ext.append_action_switch_context(
             receipt_idx,
             self.context.current_contract_context.clone(),
             target_context,
             create_missing_subcontract,
+            added_storage_balance,
         );
         Ok(())
+    }
+
+    /// Appends `SetSubcontractPermissionAction` to the batch of actions for the
+    /// given promise pointed by `promise_idx`.
+    ///
+    /// `permission` can be set to 0 for full access, or 1 for limited access.
+    ///
+    /// `context_type` is a `u64` indicating the type of context that's
+    /// represented by the data pointed to by `context_len` and `context_ptr`.
+    ///
+    /// 0: ContractContext::Root
+    /// 1: ContractContext::ShardedByAccountId, the register contains an `AccountId`
+    /// 2: ContractContext::ShardedByCodeHash, the register contain a `CryptoHash`
+    ///
+    /// Unless the type is `Root`, the last two fields point to the data. This
+    /// can be in memory, or in a register.
+    ///
+    /// If the data is in memory, set `context_len` to data length measured in
+    /// bytes and `context_ptr` to the raw pointer in guest memory space of the
+    /// data.
+    ///
+    /// If the data is in a register, set `context_len = u64::MAX` and
+    /// `context_ptr = register_id`.
+    ///
+    /// # Errors
+    ///
+    /// * If `promise_idx` does not correspond to an existing promise returns
+    ///   `InvalidPromiseIndex`.
+    /// * If the promise pointed by the `promise_idx` is an ephemeral promise
+    ///   created by `promise_and` returns `CannotAppendActionToJointPromise`.
+    /// * If `context_type` is not 0, 1, or 2 returns `InvalidContractContext`.
+    /// * If `context_type` is 1 and the data at `context_ptr` + `context_len`
+    ///   does not parse as `AccountId`, returns `InvalidAccountId`.
+    /// * If `context_type` is 2 and the data at `context_ptr` + `context_len`
+    ///   is not a valid `CryptoHash`, returns `ContractCodeHashMalformed`.
+    /// * If called as view function returns `ProhibitedInView`.
+    ///
+    /// # Cost
+    ///
+    /// TODO: Define exact costs
+    pub fn promise_batch_action_set_subcontract_permission(
+        &mut self,
+        promise_idx: u64,
+        permission: u64,
+        context_type: u64,
+        context_len: u64,
+        context_ptr: u64,
+    ) -> Result<()> {
+        // TODO(sharded_contract)
+        todo!()
     }
 
     /// If the current function is invoked by a callback we can access the execution results of the
