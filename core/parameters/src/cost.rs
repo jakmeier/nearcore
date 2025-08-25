@@ -325,6 +325,8 @@ pub enum ActionCosts {
     deploy_global_contract_byte = 17,
     use_global_contract_base = 18,
     use_global_contract_byte = 19,
+    deterministic_state_init_base = 20,
+    deterministic_state_init_byte = 21,
 }
 
 impl ExtCosts {
@@ -524,6 +526,9 @@ impl RuntimeFeesConfig {
                 ActionCosts::deploy_global_contract_byte => Fee::new(6_812_999, 6_812_999, 70_000_000),
                 ActionCosts::use_global_contract_base => Fee::test_value(184_765_750_000),
                 ActionCosts::use_global_contract_byte => Fee::new(6_812_999, 47_683_715, 64_572_944),
+                // TODO
+                ActionCosts::deterministic_state_init_base => Fee::new(0, 0, 0),
+                ActionCosts::deterministic_state_init_byte => Fee::new(0, 0, 0),
             },
         }
     }
