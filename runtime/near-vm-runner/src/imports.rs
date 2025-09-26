@@ -177,6 +177,7 @@ imports! {
     #[deterministic_account_ids] promise_batch_action_state_init<[promise_idx: u64, state_init_len: u64, state_init_ptr: u64, amount_ptr: u64] -> []>,
     #[deterministic_account_ids] promise_result_length<[result_idx: u64] -> [u64]>,
     #[deterministic_account_ids] current_contract_code<[register_id: u64] -> [u64]>,
+    #[deterministic_account_ids] refund_to_account_id<[register_id: u64] -> []>,
     #[deterministic_account_ids] storage_config_byte_cost<[balance_ptr: u64] -> []>,
     #[deterministic_account_ids] storage_config_num_bytes_account<[] -> [u64]>,
     #[deterministic_account_ids] storage_config_num_extra_bytes_record<[] -> [u64]>,
