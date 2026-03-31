@@ -3,6 +3,8 @@
 #![doc = include_str!("../README.md")]
 
 mod cache;
+#[cfg(feature = "wasmtime_vm")]
+pub mod compiler_daemon;
 mod errors;
 mod features;
 mod imports;
