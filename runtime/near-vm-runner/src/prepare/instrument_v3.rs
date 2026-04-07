@@ -130,6 +130,15 @@ pub(crate) struct InstrumentContext<'a> {
 
     types: Vec<we::FuncType>,
     function_types: std::vec::IntoIter<u32>,
+
+    /// Number of function imports in the original module (not counting our injected imports).
+    import_function_count: u32,
+    /// Number of defined functions in the original module.
+    defined_function_count: u32,
+    /// Type index for `(i64) -> ()`, reused for the gas_check function.
+    gas_fn_type_idx: u32,
+    /// Function index of the module-defined gas_check function, computed before instrumentation.
+    gas_check_fn_idx: u32,
 }
 
 struct InstrumentationReencoder;
@@ -272,6 +281,11 @@ impl<'a> InstrumentContext<'a> {
 
             types: vec![],
             function_types: vec![].into_iter(),
+
+            import_function_count: 0,
+            defined_function_count: 0,
+            gas_fn_type_idx: 0,
+            gas_check_fn_idx: 0,
         }
     }
 
@@ -306,8 +320,10 @@ impl<'a> InstrumentContext<'a> {
                                 self.globals =
                                     self.globals.checked_add(1).ok_or(Error::TooManyGlobals)?;
                             }
-                            wp::TypeRef::Func(..)
-                            | wp::TypeRef::Table(..)
+                            wp::TypeRef::Func(..) => {
+                                self.import_function_count += 1;
+                            }
+                            wp::TypeRef::Table(..)
                             | wp::TypeRef::Memory(..)
                             | wp::TypeRef::Tag(..) => {}
                         }
@@ -336,6 +352,7 @@ impl<'a> InstrumentContext<'a> {
                         .into_iter()
                         .collect::<Result<Vec<u32>, _>>()
                         .map_err(Error::ParseFunctionTypeId)?;
+                    self.defined_function_count = fn_types.len() as u32;
                     for fnty in &fn_types {
                         self.function_section.function(*fnty);
                     }
@@ -357,7 +374,10 @@ impl<'a> InstrumentContext<'a> {
                         data: self.wasm.get(range).ok_or(Error::MemorySectionRange(len))?,
                     });
                 }
-                wp::Payload::CodeSectionStart { .. } => {}
+                wp::Payload::CodeSectionStart { .. } => {
+                    self.gas_check_fn_idx =
+                        F + self.import_function_count + self.defined_function_count;
+                }
                 wp::Payload::CodeSectionEntry(reader) => {
                     self.maybe_add_imports();
                     if self.global_section.is_empty() {
@@ -433,6 +453,8 @@ impl<'a> InstrumentContext<'a> {
                 }
             }
         }
+        self.add_gas_check_function();
+
         // The type and import sections always come first in a module. They may potentially be
         // preceded or interspersed by custom sections in the original module, so we’re just hoping
         // that the ordering doesn’t matter for tests…
@@ -589,6 +611,7 @@ impl<'a> InstrumentContext<'a> {
                     Fee { constant: gas_charge, linear: 0 },
                     self.globals,
                     local_idx,
+                    self.gas_check_fn_idx,
                 )?;
             }
             let mut block_count: u64 = 0;
@@ -615,6 +638,7 @@ impl<'a> InstrumentContext<'a> {
                             *g,
                             self.globals,
                             local_idx,
+                            self.gas_check_fn_idx,
                         )?;
                     }
                 }
@@ -698,6 +722,7 @@ impl<'a> InstrumentContext<'a> {
             let exhausted_fnty = self.type_section.len();
             self.type_section.ty().function([], []);
             let gas_fnty = self.type_section.len();
+            self.gas_fn_type_idx = gas_fnty;
             self.type_section.ty().function([we::ValType::I64], []);
 
             // By inserting the imports at the beginning of the import section we make the new
@@ -742,6 +767,49 @@ impl<'a> InstrumentContext<'a> {
             we::ExportKind::Global,
             self.globals + GAS_GLOBAL,
         );
+    }
+
+    /// Appends the module-defined gas_check function to the function and code sections.
+    /// This function checks whether remaining gas is sufficient and subtracts the cost,
+    /// or traps via the imported gas instrumentation host function.
+    fn add_gas_check_function(&mut self) {
+        if self.code_section.is_empty() {
+            return;
+        }
+        // Add function type entry (reusing the (i64) -> () type from imports).
+        self.function_section.function(self.gas_fn_type_idx);
+
+        // Build function body:
+        //   (func $gas_check (param $cost i64)
+        //     global.get $gas
+        //     local.get 0
+        //     i64.lt_u
+        //     if
+        //       local.get 0
+        //       call $GAS_INSTRUMENTATION_FN
+        //       unreachable
+        //     end
+        //     global.get $gas
+        //     local.get 0
+        //     i64.sub
+        //     global.set $gas
+        //   )
+        let mut func = we::Function::new(vec![]);
+        func.instructions()
+            .global_get(self.globals + GAS_GLOBAL)
+            .local_get(0)
+            .i64_lt_u()
+            .if_(we::BlockType::Empty)
+            .local_get(0)
+            .call(GAS_INSTRUMENTATION_FN)
+            .unreachable()
+            .end()
+            .global_get(self.globals + GAS_GLOBAL)
+            .local_get(0)
+            .i64_sub()
+            .global_set(self.globals + GAS_GLOBAL)
+            .end();
+        self.code_section.function(&func);
     }
 
     fn transform_name_section(
@@ -803,28 +871,12 @@ fn call_gas_instrumentation(
     gas: Fee,
     globals: u32,
     local_idx: u32,
+    gas_check_fn_idx: u32,
 ) -> Result<(), Error> {
     if matches!(gas, Fee::ZERO) {
         return Ok(());
     } else if gas.linear == 0 {
-        // The reinterpreting cast is intentional here. On the other side the host function is
-        // expected to reinterpret the argument back to u64.
-        func.global_get(globals + GAS_GLOBAL)
-            .i64_const(gas.constant as i64)
-            // $gas | $constant
-            .i64_lt_u()
-            // $gas < $constant
-            .if_(we::BlockType::Empty)
-            .i64_const(gas.constant as i64)
-            .call(GAS_INSTRUMENTATION_FN)
-            .unreachable()
-            .else_()
-            .global_get(globals + GAS_GLOBAL)
-            .i64_const(gas.constant as i64)
-            .i64_sub()
-            // $gas - $constant
-            .global_set(globals + GAS_GLOBAL)
-            .end();
+        func.i64_const(gas.constant as i64).call(gas_check_fn_idx);
         return Ok(());
     }
     match k {
