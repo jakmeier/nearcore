@@ -400,6 +400,59 @@ pub(crate) fn prepare_contract(
     config: &Config,
     kind: VMKind,
 ) -> Result<Vec<u8>, PrepareError> {
+    prepare_contract_impl(original_code, features, config, kind, false, false, false, false)
+}
+
+#[cfg(feature = "bench_utils")]
+pub(crate) fn prepare_contract_inline_gas(
+    original_code: &[u8],
+    features: crate::features::WasmFeatures,
+    config: &Config,
+    kind: VMKind,
+) -> Result<Vec<u8>, PrepareError> {
+    prepare_contract_impl(original_code, features, config, kind, true, false, false, false)
+}
+
+#[cfg(feature = "bench_utils")]
+pub(crate) fn prepare_contract_host_gas(
+    original_code: &[u8],
+    features: crate::features::WasmFeatures,
+    config: &Config,
+    kind: VMKind,
+) -> Result<Vec<u8>, PrepareError> {
+    prepare_contract_impl(original_code, features, config, kind, false, true, false, false)
+}
+
+#[cfg(feature = "bench_utils")]
+pub(crate) fn prepare_contract_inline_subcheck(
+    original_code: &[u8],
+    features: crate::features::WasmFeatures,
+    config: &Config,
+    kind: VMKind,
+) -> Result<Vec<u8>, PrepareError> {
+    prepare_contract_impl(original_code, features, config, kind, false, false, true, false)
+}
+
+#[cfg(feature = "bench_utils")]
+pub(crate) fn prepare_contract_local_gas(
+    original_code: &[u8],
+    features: crate::features::WasmFeatures,
+    config: &Config,
+    kind: VMKind,
+) -> Result<Vec<u8>, PrepareError> {
+    prepare_contract_impl(original_code, features, config, kind, false, false, false, true)
+}
+
+fn prepare_contract_impl(
+    original_code: &[u8],
+    features: crate::features::WasmFeatures,
+    config: &Config,
+    kind: VMKind,
+    use_inline_gas: bool,
+    use_host_gas: bool,
+    use_inline_subcheck: bool,
+    use_local_gas: bool,
+) -> Result<Vec<u8>, PrepareError> {
     let lightly_steamed = PrepareContext::new(original_code, features, config).run()?;
 
     match kind {
@@ -449,6 +502,10 @@ pub(crate) fn prepare_contract(
         config.limit_config.max_params_per_function.unwrap_or(u64::MAX),
         config.limit_config.max_params_per_contract.unwrap_or(u64::MAX),
         config.limit_config.max_operand_stack_bytes_per_function.unwrap_or(u64::MAX),
+        use_inline_gas,
+        use_host_gas,
+        use_inline_subcheck,
+        use_local_gas,
     )
     .run()
     .map_err(|err| {

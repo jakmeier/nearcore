@@ -14,6 +14,10 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 blst.workspace = true
 bn.workspace = true
 borsh.workspace = true
@@ -88,6 +92,7 @@ wat.workspace = true
 [features]
 default = ["wasmtime_vm"]
 wasmtime_vm = ["wasmtime", "anyhow", "prepare"]
+bench_utils = ["wasmtime_vm", "base64", "hex", "reqwest", "serde_json"]
 near_vm = [
     "near-vm-compiler",
     "near-vm-compiler-singlepass",
@@ -132,6 +137,11 @@ costs_counting = []
 name = "bench-contracts-compilation"
 path = "benchmarks/compile_contracts.rs"
 required-features = ["wasmtime_vm"]
+
+[[bin]]
+name = "gas-metering-bench"
+path = "benchmarks/gas_metering_bench.rs"
+required-features = ["bench_utils"]
 
 [package.metadata.cargo-machete]
 ignored = ["prometheus"]

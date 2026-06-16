@@ -113,6 +113,27 @@ pub(crate) struct InstrumentContext<'a> {
     max_params_per_function: u64,
     max_params_per_contract: u64,
     max_operand_stack_bytes_per_function: u64,
+    /// When true, emit the old inline gas check sequence (~13 instructions per
+    /// block) instead of delegating to the module-defined `gas_check` function
+    /// (2 instructions per block). Only used for benchmark comparisons.
+    use_inline_gas: bool,
+    /// When true, call the `internal.finite_wasm_gas` host import directly at
+    /// every block boundary instead of going through the module-defined
+    /// `gas_check` intermediary. The host function handles both deduction and
+    /// exhaustion, so no `remaining_gas` global or `gas_check` wrapper is needed.
+    /// Only used for benchmark comparisons.
+    use_host_gas: bool,
+    /// When true, subtract before comparing: computes `remaining - cost` first,
+    /// stores to a local, then checks for sign-bit exhaustion. Eliminates the
+    /// redundant second `global.get` in the `use_inline_gas` if/else structure.
+    /// Only used for benchmark comparisons.
+    use_inline_subcheck: bool,
+    /// When true, keep the gas counter in a wasm local instead of the global for
+    /// the entire function body, syncing with the global only at host-call
+    /// boundaries (before/after every `call`/`call_indirect`) and at function
+    /// exit. Eliminates all `global.get`/`global.set` from the hot path.
+    /// Only used for benchmark comparisons.
+    use_local_gas: bool,
 
     type_section: we::TypeSection,
     import_section: we::ImportSection,
@@ -251,6 +272,10 @@ impl<'a> InstrumentContext<'a> {
         max_params_per_function: u64,
         max_params_per_contract: u64,
         max_operand_stack_bytes_per_function: u64,
+        use_inline_gas: bool,
+        use_host_gas: bool,
+        use_inline_subcheck: bool,
+        use_local_gas: bool,
     ) -> Self {
         Self {
             analysis,
@@ -264,6 +289,10 @@ impl<'a> InstrumentContext<'a> {
             max_params_per_function,
             max_params_per_contract,
             max_operand_stack_bytes_per_function,
+            use_inline_gas,
+            use_host_gas,
+            use_inline_subcheck,
+            use_local_gas,
 
             type_section: we::TypeSection::new(),
             import_section: we::ImportSection::new(),
@@ -576,8 +605,14 @@ impl<'a> InstrumentContext<'a> {
             }
         };
 
-        locals.push((1, we::ValType::I64));
-        locals.push((1, we::ValType::I32));
+        if self.use_local_gas {
+            locals.push((1, we::ValType::I64)); // local_idx: persistent gas counter
+            locals.push((1, we::ValType::I64)); // local_idx+1: computed-cost temp for linear gas
+            locals.push((1, we::ValType::I32)); // local_idx+2: element-count temp for linear gas
+        } else {
+            locals.push((1, we::ValType::I64)); // local_idx: gas/cost temp
+            locals.push((1, we::ValType::I32)); // local_idx+1: element-count temp for linear gas
+        }
         let mut new_function = we::Function::new(locals);
         'outer: {
             let Some(stack_charge) = stack_sz.checked_add(frame_sz).map(NonZeroU64::new) else {
@@ -605,6 +640,12 @@ impl<'a> InstrumentContext<'a> {
                     .checked_sub_i64(STACK_EXHAUSTED_FN)
                     // $stack - $stack_size - $frame_size
                     .global_set(self.globals + STACK_GLOBAL);
+                // In local-gas mode, load the gas counter from the global once at
+                // function entry (after the stack check, which may have called a host
+                // function that keeps the global up-to-date via the call_hook).
+                if self.use_local_gas {
+                    new_function.global_get(self.globals + GAS_GLOBAL).local_set(local_idx);
+                }
                 call_gas_instrumentation(
                     &mut new_function,
                     None,
@@ -612,7 +653,17 @@ impl<'a> InstrumentContext<'a> {
                     self.globals,
                     local_idx,
                     self.gas_check_fn_idx,
+                    self.use_inline_gas,
+                    self.use_host_gas,
+                    self.use_inline_subcheck,
+                    self.use_local_gas,
                 )?;
+            } else if self.use_local_gas {
+                // No stack charge but we still need to init the gas counter local.
+                new_function
+                    .instructions()
+                    .global_get(self.globals + GAS_GLOBAL)
+                    .local_set(local_idx);
             }
             let mut block_count: u64 = 0;
             while !operators.eof() {
@@ -639,6 +690,10 @@ impl<'a> InstrumentContext<'a> {
                             self.globals,
                             local_idx,
                             self.gas_check_fn_idx,
+                            self.use_inline_gas,
+                            self.use_host_gas,
+                            self.use_inline_subcheck,
+                            self.use_local_gas,
                         )?;
                     }
                 }
@@ -653,10 +708,40 @@ impl<'a> InstrumentContext<'a> {
                         let idx = renc
                             .function_index(function_index)
                             .or(Err(Error::RemapFunctionIndex(function_index)))?;
-                        new_function.instructions().call(idx);
+                        if self.use_local_gas {
+                            // Sync local gas counter to global before the call (so the
+                            // call_hook sees the current value), then reload after.
+                            new_function
+                                .instructions()
+                                .local_get(local_idx)
+                                .global_set(self.globals + GAS_GLOBAL)
+                                .call(idx)
+                                .global_get(self.globals + GAS_GLOBAL)
+                                .local_set(local_idx);
+                        } else {
+                            new_function.instructions().call(idx);
+                        }
+                    }
+                    wp::Operator::CallIndirect { .. } => {
+                        if self.use_local_gas {
+                            new_function
+                                .instructions()
+                                .local_get(local_idx)
+                                .global_set(self.globals + GAS_GLOBAL);
+                            new_function.raw(self.wasm[offset..end_offset].iter().copied());
+                            new_function
+                                .instructions()
+                                .global_get(self.globals + GAS_GLOBAL)
+                                .local_set(local_idx);
+                        } else {
+                            new_function.raw(self.wasm[offset..end_offset].iter().copied());
+                        }
                     }
                     wp::Operator::ReturnCall { function_index } => {
                         let mut new_function = new_function.instructions();
+                        if self.use_local_gas {
+                            new_function.local_get(local_idx).global_set(self.globals + GAS_GLOBAL);
+                        }
                         if let Some(charge) = stack_charge {
                             call_unstack_instrumentation(&mut new_function, charge, self.globals);
                         }
@@ -666,12 +751,14 @@ impl<'a> InstrumentContext<'a> {
                         new_function.return_call(idx);
                     }
                     wp::Operator::ReturnCallIndirect { .. } => {
-                        if let Some(charge) = stack_charge {
-                            call_unstack_instrumentation(
-                                &mut new_function.instructions(),
-                                charge,
-                                self.globals,
-                            );
+                        {
+                            let mut fi = new_function.instructions();
+                            if self.use_local_gas {
+                                fi.local_get(local_idx).global_set(self.globals + GAS_GLOBAL);
+                            }
+                            if let Some(charge) = stack_charge {
+                                call_unstack_instrumentation(&mut fi, charge, self.globals);
+                            }
                         }
                         new_function.raw(self.wasm[offset..end_offset].iter().copied());
                     }
@@ -679,6 +766,9 @@ impl<'a> InstrumentContext<'a> {
                         // FIXME: we could replace these `return`s with `br $well_chosen_index`
                         // targeting the block we inserted around the function body.
                         let mut new_function = new_function.instructions();
+                        if self.use_local_gas {
+                            new_function.local_get(local_idx).global_set(self.globals + GAS_GLOBAL);
+                        }
                         if let Some(charge) = stack_charge {
                             call_unstack_instrumentation(&mut new_function, charge, self.globals);
                         }
@@ -689,7 +779,14 @@ impl<'a> InstrumentContext<'a> {
                         let mut new_function = new_function.instructions();
                         if let Some(charge) = stack_charge {
                             new_function.end();
+                            if self.use_local_gas {
+                                new_function
+                                    .local_get(local_idx)
+                                    .global_set(self.globals + GAS_GLOBAL);
+                            }
                             call_unstack_instrumentation(&mut new_function, charge, self.globals);
+                        } else if self.use_local_gas {
+                            new_function.local_get(local_idx).global_set(self.globals + GAS_GLOBAL);
                         }
                         new_function.end();
                     }
@@ -762,18 +859,27 @@ impl<'a> InstrumentContext<'a> {
         );
         debug_assert!(self.global_section.len() <= self.globals + G);
 
-        self.export_section.export(
-            REMAINING_GAS_EXPORT,
-            we::ExportKind::Global,
-            self.globals + GAS_GLOBAL,
-        );
+        // For host-gas mode the remaining_gas global is unused; don't export it
+        // so the runtime doesn't try to synchronise it with the gas counter.
+        if !self.use_host_gas {
+            self.export_section.export(
+                REMAINING_GAS_EXPORT,
+                we::ExportKind::Global,
+                self.globals + GAS_GLOBAL,
+            );
+        }
     }
 
     /// Appends the module-defined gas_check function to the function and code sections.
     /// This function checks whether remaining gas is sufficient and subtracts the cost,
     /// or traps via the imported gas instrumentation host function.
     fn add_gas_check_function(&mut self) {
-        if self.code_section.is_empty() {
+        if self.use_inline_gas
+            || self.use_host_gas
+            || self.use_inline_subcheck
+            || self.use_local_gas
+            || self.code_section.is_empty()
+        {
             return;
         }
         // Add function type entry (reusing the (i64) -> () type from imports).
@@ -872,11 +978,72 @@ fn call_gas_instrumentation(
     globals: u32,
     local_idx: u32,
     gas_check_fn_idx: u32,
+    use_inline_gas: bool,
+    use_host_gas: bool,
+    use_inline_subcheck: bool,
+    use_local_gas: bool,
 ) -> Result<(), Error> {
     if matches!(gas, Fee::ZERO) {
         return Ok(());
     } else if gas.linear == 0 {
-        func.i64_const(gas.constant as i64).call(gas_check_fn_idx);
+        if use_host_gas {
+            // Call the host import directly; it handles deduction and exhaustion.
+            func.i64_const(gas.constant as i64).call(GAS_INSTRUMENTATION_FN);
+        } else if use_local_gas {
+            // local_idx is the persistent gas counter; no global in the hot path.
+            // On exhaustion, recover the pre-subtract value and sync to global so
+            // the call_hook sees the correct remaining gas before calling the host.
+            func.local_get(local_idx)
+                .i64_const(gas.constant as i64)
+                .i64_sub()
+                .local_tee(local_idx)
+                .i64_const(0)
+                .i64_lt_s()
+                .if_(we::BlockType::Empty)
+                .local_get(local_idx)
+                .i64_const(gas.constant as i64)
+                .i64_add() // recover R before subtraction
+                .global_set(globals + GAS_GLOBAL)
+                .i64_const(gas.constant as i64)
+                .call(GAS_INSTRUMENTATION_FN)
+                .unreachable()
+                .end();
+            // gas counter (local_idx) already updated by local.tee
+        } else if use_inline_gas {
+            // Old approach: two global.gets (one to compare, one to update).
+            func.global_get(globals + GAS_GLOBAL)
+                .i64_const(gas.constant as i64)
+                .i64_lt_u()
+                .if_(we::BlockType::Empty)
+                .i64_const(gas.constant as i64)
+                .call(GAS_INSTRUMENTATION_FN)
+                .unreachable()
+                .else_()
+                .global_get(globals + GAS_GLOBAL)
+                .i64_const(gas.constant as i64)
+                .i64_sub()
+                .global_set(globals + GAS_GLOBAL)
+                .end();
+        } else if use_inline_subcheck {
+            // Subtract first, eliminating the redundant second global.get.
+            // Uses local_idx as a scratch register for the result.
+            // Note: remaining_gas is always within signed i64 range for NEAR.
+            func.global_get(globals + GAS_GLOBAL)
+                .i64_const(gas.constant as i64)
+                .i64_sub()
+                .local_tee(local_idx)
+                .i64_const(0)
+                .i64_lt_s()
+                .if_(we::BlockType::Empty)
+                .i64_const(gas.constant as i64)
+                .call(GAS_INSTRUMENTATION_FN)
+                .unreachable()
+                .end()
+                .local_get(local_idx)
+                .global_set(globals + GAS_GLOBAL);
+        } else {
+            func.i64_const(gas.constant as i64).call(gas_check_fn_idx);
+        }
         return Ok(());
     }
     match k {
@@ -890,37 +1057,87 @@ fn call_gas_instrumentation(
             | InstrumentationKind::MemoryGrow
             | InstrumentationKind::TableGrow,
         ) => {
-            let count_idx = local_idx.checked_add(1).ok_or(Error::TooManyLocals)?;
-            func.local_tee(count_idx)
-                .i64_extend_i32_u()
-                // $count
-                .i64_const(gas.linear as i64)
-                // $count | $linear
-                .checked_mul_i64(GAS_EXHAUSTED_FN)
-                // $count * $linear
-                .i64_const(0)
-                .i64_const(gas.constant as i64)
-                .i64_const(0)
-                // $count * $linear | 0 | $constant | 0
-                .checked_add_i64(GAS_EXHAUSTED_FN)
-                // $count * $linear + $constant
-                .local_tee(local_idx)
-                .global_get(globals + GAS_GLOBAL)
-                .i64_gt_u()
-                // $count * $linear + $constant > $gas
-                .if_(we::BlockType::Empty)
-                .local_get(local_idx)
-                .call(GAS_INSTRUMENTATION_FN)
-                .unreachable()
-                .else_()
-                .global_get(globals + GAS_GLOBAL)
-                .local_get(local_idx)
-                .i64_sub()
-                // $gas - $count * $linear + $constant
-                .global_set(globals + GAS_GLOBAL)
-                .end()
-                // $count
-                .local_get(count_idx);
+            // In local-gas mode: gas_counter=local_idx, cost_temp=local_idx+1,
+            // count_idx=local_idx+2. Otherwise: cost_temp=local_idx (reused),
+            // count_idx=local_idx+1.
+            let (count_idx, cost_temp) = if use_local_gas {
+                (
+                    local_idx.checked_add(2).ok_or(Error::TooManyLocals)?,
+                    local_idx.checked_add(1).ok_or(Error::TooManyLocals)?,
+                )
+            } else {
+                (local_idx.checked_add(1).ok_or(Error::TooManyLocals)?, local_idx)
+            };
+            if use_host_gas {
+                // Compute count * linear + constant, then call the host directly.
+                func.local_tee(count_idx)
+                    .i64_extend_i32_u()
+                    .i64_const(gas.linear as i64)
+                    .checked_mul_i64(GAS_EXHAUSTED_FN)
+                    .i64_const(0)
+                    .i64_const(gas.constant as i64)
+                    .i64_const(0)
+                    .checked_add_i64(GAS_EXHAUSTED_FN)
+                    .call(GAS_INSTRUMENTATION_FN)
+                    .local_get(count_idx);
+            } else if use_local_gas {
+                // Use local gas counter; sync to global only on the exhaustion path.
+                func.local_tee(count_idx)
+                    .i64_extend_i32_u()
+                    .i64_const(gas.linear as i64)
+                    .checked_mul_i64(GAS_EXHAUSTED_FN)
+                    .i64_const(0)
+                    .i64_const(gas.constant as i64)
+                    .i64_const(0)
+                    .checked_add_i64(GAS_EXHAUSTED_FN)
+                    .local_tee(cost_temp)
+                    .local_get(local_idx) // gas counter
+                    .i64_gt_u()
+                    .if_(we::BlockType::Empty)
+                    .local_get(local_idx)
+                    .global_set(globals + GAS_GLOBAL) // sync for call_hook
+                    .local_get(cost_temp)
+                    .call(GAS_INSTRUMENTATION_FN)
+                    .unreachable()
+                    .else_()
+                    .local_get(local_idx)
+                    .local_get(cost_temp)
+                    .i64_sub()
+                    .local_set(local_idx) // update gas counter
+                    .end()
+                    .local_get(count_idx);
+            } else {
+                func.local_tee(count_idx)
+                    .i64_extend_i32_u()
+                    // $count
+                    .i64_const(gas.linear as i64)
+                    // $count | $linear
+                    .checked_mul_i64(GAS_EXHAUSTED_FN)
+                    // $count * $linear
+                    .i64_const(0)
+                    .i64_const(gas.constant as i64)
+                    .i64_const(0)
+                    // $count * $linear | 0 | $constant | 0
+                    .checked_add_i64(GAS_EXHAUSTED_FN)
+                    // $count * $linear + $constant
+                    .local_tee(cost_temp)
+                    .global_get(globals + GAS_GLOBAL)
+                    .i64_gt_u()
+                    // $count * $linear + $constant > $gas
+                    .if_(we::BlockType::Empty)
+                    .local_get(cost_temp)
+                    .call(GAS_INSTRUMENTATION_FN)
+                    .unreachable()
+                    .else_()
+                    .global_get(globals + GAS_GLOBAL)
+                    .local_get(cost_temp)
+                    .i64_sub()
+                    // $gas - $count * $linear + $constant
+                    .global_set(globals + GAS_GLOBAL)
+                    .end()
+                    // $count
+                    .local_get(count_idx);
+            }
             Ok(())
         }
         _ => {

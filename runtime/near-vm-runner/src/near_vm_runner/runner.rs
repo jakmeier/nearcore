@@ -30,7 +30,7 @@ use std::sync::{Arc, OnceLock};
 
 type VMArtifact = Arc<UniversalArtifact>;
 
-fn get_entrypoint_index(
+pub(super) fn get_entrypoint_index(
     artifact: &UniversalArtifact,
     method_name: &str,
 ) -> Result<FunctionIndex, FunctionCallError> {
@@ -368,7 +368,7 @@ impl NearVM {
         }
     }
 
-    fn run_method(
+    pub(super) fn run_method(
         &self,
         artifact: &VMArtifact,
         mut import: NearVmImports<'_, '_, '_>,

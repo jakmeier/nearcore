@@ -1,6 +1,9 @@
 mod memory;
 mod runner;
 
+#[cfg(feature = "bench_utils")]
+pub mod bench;
+
 pub use memory::NearVmMemory;
 pub(crate) use runner::NearVM;
 

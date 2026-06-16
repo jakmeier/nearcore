@@ -34,6 +34,8 @@ use wasmtime::{
     WasmBacktraceDetails,
 };
 
+#[cfg(feature = "bench_utils")]
+pub mod bench;
 mod logic;
 #[cfg(test)]
 pub(crate) mod test_logic;

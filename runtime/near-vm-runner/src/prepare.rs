@@ -32,6 +32,62 @@ pub fn prepare_contract(
     }
 }
 
+/// Like [`prepare_contract`] but uses the old inline gas instrumentation
+/// (pre-`f6e40fe391`): ~13 instructions inlined per block boundary instead of
+/// a 2-instruction call to a module-defined helper. For benchmark use only.
+#[cfg(feature = "bench_utils")]
+pub fn prepare_contract_inline_gas(
+    original_code: &[u8],
+    config: &Config,
+    kind: VMKind,
+) -> Result<Vec<u8>, PrepareError> {
+    let features = crate::features::WasmFeatures::new(config);
+    prepare_v3::prepare_contract_inline_gas(original_code, features, config, kind)
+}
+
+/// Like [`prepare_contract`] but instruments with direct calls to the
+/// `internal.finite_wasm_gas` host import at every block boundary. The host
+/// function handles both deduction and exhaustion, eliminating the need for
+/// the module-defined `gas_check` wrapper or the `remaining_gas` global. For
+/// benchmark use only.
+#[cfg(feature = "bench_utils")]
+pub fn prepare_contract_host_gas(
+    original_code: &[u8],
+    config: &Config,
+    kind: VMKind,
+) -> Result<Vec<u8>, PrepareError> {
+    let features = crate::features::WasmFeatures::new(config);
+    prepare_v3::prepare_contract_host_gas(original_code, features, config, kind)
+}
+
+/// Like [`prepare_contract_inline_gas`] but subtract-first: computes
+/// `remaining - cost` before the comparison, saving one `global.get` by using
+/// a local as a scratch register. For benchmark use only.
+#[cfg(feature = "bench_utils")]
+pub fn prepare_contract_inline_subcheck(
+    original_code: &[u8],
+    config: &Config,
+    kind: VMKind,
+) -> Result<Vec<u8>, PrepareError> {
+    let features = crate::features::WasmFeatures::new(config);
+    prepare_v3::prepare_contract_inline_subcheck(original_code, features, config, kind)
+}
+
+/// Like [`prepare_contract`] but keeps the gas counter in a wasm local for
+/// the entire function body, syncing with the `remaining_gas` global only at
+/// host-call boundaries (before/after every `call`/`call_indirect`) and at
+/// function exit. Eliminates all global memory accesses from the hot path.
+/// For benchmark use only.
+#[cfg(feature = "bench_utils")]
+pub fn prepare_contract_local_gas(
+    original_code: &[u8],
+    config: &Config,
+    kind: VMKind,
+) -> Result<Vec<u8>, PrepareError> {
+    let features = crate::features::WasmFeatures::new(config);
+    prepare_v3::prepare_contract_local_gas(original_code, features, config, kind)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

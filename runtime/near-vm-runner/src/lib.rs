@@ -49,6 +49,17 @@ pub(crate) const START_EXPORT: &str = "start";
 #[cfg(any(feature = "prepare", feature = "wasmtime_vm"))]
 pub(crate) const EXPORT_PREFIX: &str = "\0";
 
+/// Utilities for gas metering strategy benchmarks. Not for production use.
+#[cfg(feature = "bench_utils")]
+pub mod bench_utils {
+    #[cfg(all(feature = "near_vm", target_arch = "x86_64"))]
+    pub use crate::near_vm_runner::bench::{NearBenchEngine, NearBenchModule};
+    pub use crate::wasmtime_runner::bench::{
+        BenchEngine, BenchModule, ExecMetrics, GasMeteringStrategy, InitCallOwned, StateSnapshot,
+        decode_args_b64, fetch_contract_state, fetch_or_load_state,
+    };
+}
+
 /// This is public for internal experimentation use only, and should otherwise be considered an
 /// implementation detail of `near-vm-runner`.
 #[doc(hidden)]
