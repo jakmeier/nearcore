@@ -3,11 +3,10 @@
 //! Runs inside the child process spawned by the parent. Sets a memory limit,
 //! then loops reading compilation requests and writing responses.
 
+use super::MIN_WORKER_MEMORY_LIMIT_BYTES;
 use super::protocol::{CompileRequest, CompileResponse, read_frame, write_frame};
 use crate::wasmtime_runner::create_compiler_engine;
 use std::collections::{HashMap, hash_map};
-
-const MEMORY_LIMIT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Entry point for the compiler daemon subprocess.
 /// Called when the binary is invoked with the `compile-wasm` argument.
@@ -60,7 +59,10 @@ fn handle_compile(
 #[cfg(unix)]
 fn set_memory_limit() {
     let ret = unsafe {
-        let limit = libc::rlimit { rlim_cur: MEMORY_LIMIT_BYTES, rlim_max: MEMORY_LIMIT_BYTES };
+        let limit = libc::rlimit {
+            rlim_cur: MIN_WORKER_MEMORY_LIMIT_BYTES,
+            rlim_max: MIN_WORKER_MEMORY_LIMIT_BYTES,
+        };
         libc::setrlimit(libc::RLIMIT_AS, &limit)
     };
     if ret != 0 {

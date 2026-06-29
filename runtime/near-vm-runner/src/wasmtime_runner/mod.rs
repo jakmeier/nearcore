@@ -1,4 +1,5 @@
 use crate::cache::get_contract_cache_key;
+use crate::compile_priority::CompilePriority;
 use crate::errors::ContractPrecompilatonResult;
 use crate::logic::errors::{
     CacheError, CompilationError, FunctionCallError, MethodResolveError, VMLogicError,
@@ -500,6 +501,9 @@ pub(crate) struct WasmtimeVM {
     config: Arc<Config>,
     engine: wasmtime::Engine,
     concurrency: ConcurrencySemaphore,
+    /// Priority for compilations this handle triggers if the out-of-process
+    /// compiler daemon is enabled. Unused otherwise.
+    priority: CompilePriority,
 }
 
 #[derive(Clone)]
@@ -573,7 +577,7 @@ impl WasmtimeVM {
             let config = Arc::clone(&vm_key.config);
             let engine = Engine::new(&engine_config).expect("failed to construct Wasmtime engine");
             let concurrency = ConcurrencySemaphore::new(max_tables);
-            Self { config, engine, concurrency }
+            Self { config, engine, concurrency, priority: CompilePriority::default() }
         });
         Ok(vm.clone())
     }
@@ -597,7 +601,11 @@ impl WasmtimeVM {
 
         let serialized = if compiler_daemon::is_daemon_configured() {
             COMPILATION_PATH_TOTAL.with_label_values(&["daemon"]).inc();
-            compiler_daemon::compile_in_subprocess(&prepared_code, &self.config.limit_config)?
+            compiler_daemon::compile_in_subprocess(
+                &prepared_code,
+                &self.config.limit_config,
+                self.priority,
+            )?
         } else {
             COMPILATION_PATH_TOTAL.with_label_values(&["in_process"]).inc();
             self.engine.precompile_module(&prepared_code).map_err(|err| {
@@ -870,6 +878,10 @@ impl crate::runner::VM for WasmtimeVM {
         // for trait dispatch from `get_contract_cache_key` callers that
         // hold a `&dyn VM`.
         WasmtimeVM::vm_hash(self)
+    }
+
+    fn set_compile_priority(&mut self, priority: CompilePriority) {
+        self.priority = priority;
     }
 
     fn contract_cached(

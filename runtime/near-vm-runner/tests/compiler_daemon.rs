@@ -7,9 +7,13 @@
 
 use assert_matches::assert_matches;
 use near_parameters::vm::VMKind;
+use near_vm_runner::CompilePriority;
 use near_vm_runner::compiler_daemon;
 use near_vm_runner::logic::errors::CompilationError;
 use near_vm_runner::prepare;
+use std::sync::Arc;
+
+const TEST_POOL_SIZE: usize = 4;
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("compile-wasm") {
@@ -17,9 +21,12 @@ fn main() {
     }
 
     compiler_daemon::set_daemon_binary(std::env::current_exe().unwrap());
+    compiler_daemon::set_daemon_pool_size(TEST_POOL_SIZE);
 
     test_basic_compilation();
     test_invalid_wasm();
+    test_parallel_compilation();
+    test_mixed_priority_compilation();
 }
 
 fn test_config() -> near_parameters::vm::Config {
@@ -28,19 +35,131 @@ fn test_config() -> near_parameters::vm::Config {
     (*runtime_config.wasm_config).clone()
 }
 
+/// Build a distinct, non-trivial WASM module.
+///
+/// - Change `seed` makes unique artifacts.
+/// - Increase `num_funcs` to make compilation take long enough that concurrent callers actually overlap.
+fn prepared_module(config: &near_parameters::vm::Config, seed: usize, num_funcs: usize) -> Vec<u8> {
+    let mut wat = String::from("(module\n");
+    for i in 0..num_funcs {
+        let value = (seed as i64) * 1_000_000 + i as i64;
+        wat.push_str(&format!("(func (export \"f{i}\") (result i64) (i64.const {value}))\n"));
+    }
+    wat.push_str(")\n");
+    let wasm = wat::parse_str(&wat).unwrap();
+    prepare::prepare_contract(&wasm, config, VMKind::Wasmtime).unwrap()
+}
+
 fn test_basic_compilation() {
     let config = test_config();
     let wasm = wat::parse_str(r#"(module (func (export "main")))"#).unwrap();
     let prepared = prepare::prepare_contract(&wasm, &config, VMKind::Wasmtime).unwrap();
 
-    let result = compiler_daemon::compile_in_subprocess(&prepared, &config.limit_config);
+    let result = compiler_daemon::compile_in_subprocess(
+        &prepared,
+        &config.limit_config,
+        CompilePriority::Critical,
+    );
     let compiled = result.unwrap();
     assert!(!compiled.is_empty());
 }
 
 fn test_invalid_wasm() {
     let config = test_config();
-    let result =
-        compiler_daemon::compile_in_subprocess(b"this is not valid wasm", &config.limit_config);
+    let result = compiler_daemon::compile_in_subprocess(
+        b"this is not valid wasm",
+        &config.limit_config,
+        CompilePriority::Critical,
+    );
     assert_matches!(result, Err(CompilationError::WasmtimeCompileError { .. }));
+}
+
+/// Hammer the daemon from many threads compiling a mix of distinct modules.
+/// Asserts every compile succeeds, that output is deterministic across workers,
+/// and that more than one worker subprocess was actually spawned (i.e. real
+/// parallelism occurred, not just serial reuse of a single worker).
+fn test_parallel_compilation() {
+    const VARIANTS: usize = 4;
+    const THREADS: usize = 16;
+    const ITERS: usize = 8;
+    let config = Arc::new(test_config());
+
+    // Reference artifacts: compile each variant once up front.
+    let prepared: Vec<Vec<u8>> = (0..VARIANTS).map(|s| prepared_module(&config, s, 300)).collect();
+    let reference: Vec<Vec<u8>> = prepared
+        .iter()
+        .map(|p| {
+            compiler_daemon::compile_in_subprocess(
+                p,
+                &config.limit_config,
+                CompilePriority::Critical,
+            )
+            .unwrap()
+        })
+        .collect();
+    let prepared = Arc::new(prepared);
+    let reference = Arc::new(reference);
+
+    let handles: Vec<_> = (0..THREADS)
+        .map(|t| {
+            let config = Arc::clone(&config);
+            let prepared = Arc::clone(&prepared);
+            let reference = Arc::clone(&reference);
+            std::thread::spawn(move || {
+                for i in 0..ITERS {
+                    let variant = (t + i) % VARIANTS;
+                    let compiled = compiler_daemon::compile_in_subprocess(
+                        &prepared[variant],
+                        &config.limit_config,
+                        CompilePriority::Critical,
+                    )
+                    .unwrap();
+                    assert!(!compiled.is_empty());
+                    // Daemon output must be deterministic regardless of which
+                    // worker served the request.
+                    assert_eq!(compiled, reference[variant], "nondeterministic artifact");
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let high_water = compiler_daemon::spawned_worker_high_water();
+    assert!(high_water >= 2, "expected >1 worker to spawn under load, got {high_water}");
+    assert!(high_water <= TEST_POOL_SIZE, "spawned more workers than the pool cap: {high_water}");
+}
+
+/// Concurrent compilations across all three priority classes must all succeed.
+/// Exercises `checkout` with mixed priorities and contention without relying on
+/// timing-sensitive ordering assertions (the ordering decision is unit-tested
+/// separately in `parent.rs`).
+fn test_mixed_priority_compilation() {
+    const THREADS: usize = 12;
+    let config = Arc::new(test_config());
+    let prepared = Arc::new(prepared_module(&config, 42, 200));
+
+    let priorities =
+        [CompilePriority::Critical, CompilePriority::Interactive, CompilePriority::Background];
+
+    let handles: Vec<_> = (0..THREADS)
+        .map(|t| {
+            let config = Arc::clone(&config);
+            let prepared = Arc::clone(&prepared);
+            let priority = priorities[t % priorities.len()];
+            std::thread::spawn(move || {
+                let compiled = compiler_daemon::compile_in_subprocess(
+                    &prepared,
+                    &config.limit_config,
+                    priority,
+                )
+                .unwrap();
+                assert!(!compiled.is_empty());
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
 }

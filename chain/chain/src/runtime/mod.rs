@@ -56,7 +56,7 @@ use near_store::{
     TrieConfig, TrieUpdate, WrappedTrieChanges, get_access_key, get_gas_key_nonce,
 };
 use near_vm_runner::ContractCode;
-use near_vm_runner::{ContractRuntimeCache, precompile_contract};
+use near_vm_runner::{CompilePriority, ContractRuntimeCache, precompile_contract_with_priority};
 use node_runtime::adapter::ViewRuntimeAdapter;
 use node_runtime::cache_warming::cache_keys_differ;
 use node_runtime::config::tx_cost;
@@ -1645,7 +1645,23 @@ impl RuntimeAdapter for NightshadeRuntime {
             let config = Arc::clone(&runtime_config.wasm_config);
             let cache = self.compiled_contract_cache.handle();
             contract_compilation_pool().spawn_boxed(Box::new(move || {
-                precompile_contract(&code, config, Some(&*cache)).ok();
+                // TODO: With out-of-process compilation, the current
+                // parent-side pooling behaviour is not ideal.
+                //
+                // When the daemon is enabled, pool threads block on IPC rather
+                // than compute, and the parent pool's FIFO ordering can let
+                // Background precompiles queue ahead of Critical pipelining
+                // compiles, bypassing the daemon's CompilePriority at the
+                // parent level. The proper fix is a priority-aware parent pool
+                // (or routing background precompiles off this shared pool);
+                // deferred to a separate change.
+                precompile_contract_with_priority(
+                    &code,
+                    config,
+                    Some(&*cache),
+                    CompilePriority::Background,
+                )
+                .ok();
                 let _ = tx.send(());
             }));
         }

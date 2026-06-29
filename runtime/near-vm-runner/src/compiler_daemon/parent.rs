@@ -1,16 +1,33 @@
 //! Parent-side client for the out-of-process compiler daemon.
 //!
-//! A global Mutex serializes all access to the daemon subprocess and its
-//! pipes, so concurrent callers block until the current compilation finishes.
+//! A pool of worker subprocesses serves compilations in parallel, so
+//! independent compilations (e.g. for different shards) run concurrently rather
+//! than serializing through a single subprocess. The pool spawns workers lazily
+//! up to a configured maximum and blocks callers when all workers are busy.
+//!
+//! Worker checkout is priority-ordered: when a worker frees up, the most urgent
+//! waiting caller is served first (see [`CompilePriority`]). This keeps a burst
+//! of background compilations (state sync, cache pre-warming, witness
+//! validation) from delaying latency-critical ones.
 
 use super::protocol::{CompileRequest, CompileResponse, read_frame, write_frame};
+use crate::compile_priority::CompilePriority;
+use crate::compiler_daemon::{
+    DEFAULT_TOTAL_MEMORY_BUDGET_BYTES, MAX_POOL_SIZE, MAX_SPAWN_ATTEMPTS,
+    MIN_WORKER_MEMORY_LIMIT_BYTES,
+};
 use crate::logic::errors::CompilationError;
 use near_parameters::vm::LimitConfig;
+use parking_lot::{Condvar, Mutex};
+use std::array::from_fn;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use std::thread::available_parallelism;
 
 static DAEMON_BINARY: OnceLock<PathBuf> = OnceLock::new();
+static DAEMON_POOL_SIZE: OnceLock<usize> = OnceLock::new();
+static DAEMON_POOL: OnceLock<DaemonPool> = OnceLock::new();
 
 /// Set the path to the binary that should be spawned as the compiler daemon.
 /// In production, `neard` calls this with its own binary path at startup.
@@ -19,6 +36,17 @@ static DAEMON_BINARY: OnceLock<PathBuf> = OnceLock::new();
 pub fn set_daemon_binary(path: PathBuf) {
     if DAEMON_BINARY.set(path).is_err() {
         tracing::warn!("set_daemon_binary called more than once, ignoring");
+    }
+}
+
+/// Configure the maximum number of compiler-daemon worker subprocesses.
+/// Must be called before the first compilation; later calls are ignored.
+/// If never called, defaults to the smaller of CPU parallelism and
+/// `DEFAULT_TOTAL_MEMORY_BUDGET_BYTES` divided by the per-worker memory budget,
+/// clamped to `[1, MAX_POOL_SIZE]`.
+pub fn set_daemon_pool_size(size: usize) {
+    if DAEMON_POOL_SIZE.set(size).is_err() {
+        tracing::warn!("set_daemon_pool_size called more than once, ignoring");
     }
 }
 
@@ -79,61 +107,171 @@ impl Drop for DaemonProcess {
     }
 }
 
-struct DaemonState {
+struct PoolInner {
+    /// Workers that are spawned and currently idle, ready to be checked out.
+    idle: Vec<DaemonProcess>,
+    /// Number of workers currently "live": idle + checked-out + being-spawned.
+    /// This is the permit count; invariant: `idle.len() <= live <= max_workers`.
+    live: usize,
+    /// Number of callers blocked waiting for a worker, per priority class.
+    waiters: [usize; CompilePriority::COUNT],
+    /// Maximum `live` ever reached. Diagnostic witness that parallelism
+    /// occurred (used by tests).
+    #[cfg(feature = "test_features")]
+    high_water: usize,
+}
+
+struct DaemonPool {
     binary: PathBuf,
-    daemon: Option<DaemonProcess>,
+    max_workers: usize,
+    inner: Mutex<PoolInner>,
+    /// One wait queue per priority class; index by `CompilePriority::index`.
+    avail: [Condvar; CompilePriority::COUNT],
 }
 
-const MAX_SPAWN_ATTEMPTS: u32 = 2;
-
-impl DaemonState {
-    fn ensure_daemon(&mut self) -> Result<&mut DaemonProcess, String> {
-        if !self.daemon.as_mut().is_some_and(|daemon| daemon.is_alive()) {
-            self.daemon = Some(
-                DaemonProcess::spawn(&self.binary)
-                    .map_err(|e| format!("failed to spawn compiler daemon: {e}"))?,
-            );
-        }
-        Ok(self.daemon.as_mut().unwrap())
-    }
-
-    fn compile(&mut self, request: &CompileRequest) -> CompileResult {
-        let mut last_err = String::new();
-        for attempt in 0..MAX_SPAWN_ATTEMPTS {
-            let daemon = self.ensure_daemon()?;
-            match daemon.compile_raw(request) {
-                Ok(result) => return result,
-                Err(ipc_err) => {
-                    tracing::warn!(
-                        attempt,
-                        err = ipc_err,
-                        "compiler daemon process failed, respawning"
-                    );
-                    last_err = ipc_err;
-                    self.daemon = None;
+impl DaemonPool {
+    /// Block until a worker is available.
+    fn checkout(&self, priority: CompilePriority) -> Result<DaemonProcess, String> {
+        let mut inner = self.inner.lock();
+        loop {
+            // 1. Reuse an idle worker, draining any that have died.
+            while let Some(mut worker) = inner.idle.pop() {
+                if worker.is_alive() {
+                    return Ok(worker);
                 }
+                // Dead idle worker: release its permit and let it drop (reaped).
+                inner.live -= 1;
             }
+
+            // 2. No idle worker: spawn one if we have headroom. Reserve the
+            //    permit first, then spawn WITHOUT holding the lock (fork/exec
+            //    can block and must not stall other callers).
+            if inner.live < self.max_workers {
+                inner.live += 1;
+                #[cfg(feature = "test_features")]
+                {
+                    inner.high_water = inner.high_water.max(inner.live);
+                }
+                drop(inner);
+                return match DaemonProcess::spawn(&self.binary) {
+                    Ok(worker) => Ok(worker),
+                    Err(e) => {
+                        let mut inner = self.inner.lock();
+                        inner.live -= 1;
+                        self.wake_one(&mut inner);
+                        Err(format!("failed to spawn compiler daemon: {e}"))
+                    }
+                };
+            }
+
+            // 3. All permits in use and none idle: wait on our priority.
+            let idx = priority.index();
+            inner.waiters[idx] += 1;
+            self.avail[idx].wait(&mut inner);
+            inner.waiters[idx] -= 1;
         }
-        tracing::error!(attempts = MAX_SPAWN_ATTEMPTS, "compiler daemon process failed, giving up");
-        Err(last_err)
+    }
+
+    fn wake_one(&self, inner: &mut PoolInner) {
+        if let Some(idx) = highest_priority_waiter(&inner.waiters) {
+            self.avail[idx].notify_one();
+        }
     }
 }
 
-static DAEMON_STATE: OnceLock<Mutex<DaemonState>> = OnceLock::new();
+/// Index of the highest-priority class with at least one waiter.
+///
+/// Pure helper so the selection is unit-testable without spawning processes or
+/// relying on timing.
+fn highest_priority_waiter(waiters: &[usize; CompilePriority::COUNT]) -> Option<usize> {
+    (0..CompilePriority::COUNT).find(|&idx| waiters[idx] > 0)
+}
 
-fn get_or_init_state() -> &'static Mutex<DaemonState> {
-    DAEMON_STATE.get_or_init(|| {
+/// RAII handle for a worker checked out of the pool.
+struct Lease {
+    pool: &'static DaemonPool,
+    worker: Option<DaemonProcess>,
+}
+
+impl Lease {
+    /// Return a healthy worker to the idle set, releasing it for reuse.
+    fn checkin(mut self) {
+        if let Some(worker) = self.worker.take() {
+            let mut inner = self.pool.inner.lock();
+            inner.idle.push(worker);
+            self.pool.wake_one(&mut inner);
+        }
+    }
+
+    /// Drop crashed worker and free its permit.
+    fn discard(mut self) {
+        if let Some(worker) = self.worker.take() {
+            drop(worker);
+            let mut inner = self.pool.inner.lock();
+            inner.live -= 1;
+            self.pool.wake_one(&mut inner);
+        }
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        // Fail-safe reached only if neither checkin nor discard ran (e.g. a
+        // panic mid compile). Drop the worker and free the permit.
+        if let Some(worker) = self.worker.take() {
+            drop(worker);
+            let mut inner = self.pool.inner.lock();
+            inner.live -= 1;
+            self.pool.wake_one(&mut inner);
+        }
+    }
+}
+/// Default worker count when not configured: the smaller of two bounds, then
+/// clamped to `[1, MAX_POOL_SIZE]`.
+///
+/// - CPU: `available_parallelism()`. Each worker compiles with the full rayon
+///   pool, so more workers than cores only adds contention.
+/// - Memory: `DEFAULT_TOTAL_MEMORY_BUDGET_BYTES /
+///   MIN_WORKER_MEMORY_LIMIT_BYTES`. Keeping `workers × per_worker_limit`
+///   within the configured RAM budget is what stops a burst of compilations
+///   from tripping the kernel OOM killer and taking neard with it.
+fn default_pool_size() -> usize {
+    let by_cpu = available_parallelism().map_or(4, |n| n.get());
+    let by_memory = (DEFAULT_TOTAL_MEMORY_BUDGET_BYTES / MIN_WORKER_MEMORY_LIMIT_BYTES) as usize;
+    by_cpu.min(by_memory).clamp(1, MAX_POOL_SIZE)
+}
+
+fn get_or_init_pool() -> &'static DaemonPool {
+    DAEMON_POOL.get_or_init(|| {
         let binary = DAEMON_BINARY.get().expect("daemon binary not configured").clone();
-        Mutex::new(DaemonState { binary, daemon: None })
+        let max_workers = DAEMON_POOL_SIZE
+            .get()
+            .copied()
+            .unwrap_or_else(default_pool_size)
+            .clamp(1, MAX_POOL_SIZE);
+        DaemonPool {
+            binary,
+            max_workers,
+            inner: Mutex::new(PoolInner {
+                idle: Vec::new(),
+                live: 0,
+                waiters: [0; CompilePriority::COUNT],
+                #[cfg(feature = "test_features")]
+                high_water: 0,
+            }),
+            avail: from_fn(|_| Condvar::new()),
+        }
     })
 }
 
-/// Compile prepared WASM code in the out-of-process daemon.
+/// Compile prepared WASM code in an out-of-process daemon worker.
 ///
-/// Panics if no daemon binary has been configured via `set_daemon_binary`.
+/// Blocks if all workers are busy, ordered by `priority`. Panics if no daemon
+/// binary has been configured via `set_daemon_binary`.
 pub fn compile_in_subprocess(
     prepared_code: &[u8],
     limit_config: &LimitConfig,
+    priority: CompilePriority,
 ) -> Result<Vec<u8>, CompilationError> {
     let request = CompileRequest {
         prepared_code: prepared_code.to_vec(),
@@ -144,6 +282,64 @@ pub fn compile_in_subprocess(
             .map(|v| v as u64),
     };
 
-    let mut state = get_or_init_state().lock().unwrap();
-    state.compile(&request).map_err(|msg| CompilationError::WasmtimeCompileError { msg })
+    let pool = get_or_init_pool();
+
+    let mut last_err = String::new();
+    for attempt in 0..MAX_SPAWN_ATTEMPTS {
+        let mut lease = match pool.checkout(priority) {
+            Ok(worker) => Lease { pool, worker: Some(worker) },
+            Err(spawn_err) => {
+                last_err = spawn_err;
+                continue;
+            }
+        };
+        match lease.worker.as_mut().unwrap().compile_raw(&request) {
+            Ok(Ok(bytes)) => {
+                lease.checkin();
+                return Ok(bytes);
+            }
+            Ok(Err(msg)) => {
+                // Compilation error: the worker is healthy, not retryable.
+                lease.checkin();
+                return Err(CompilationError::WasmtimeCompileError { msg });
+            }
+            Err(ipc_err) => {
+                tracing::warn!(attempt, err = %ipc_err, "compiler daemon worker failed, respawning");
+                last_err = ipc_err;
+                lease.discard();
+            }
+        }
+    }
+    tracing::error!(attempts = MAX_SPAWN_ATTEMPTS, "compiler daemon failed, giving up");
+    Err(CompilationError::WasmtimeCompileError { msg: last_err })
+}
+
+// Maximum number of worker subprocesses ever spawned concurrently.
+// Diagnostic helper for tests to witness that parallel compilation actually
+// occurred; hidden from the production API behind `test_features`.
+#[cfg(feature = "test_features")]
+pub fn spawned_worker_high_water() -> usize {
+    get_or_init_pool().inner.lock().high_water
+}
+
+#[cfg(test)]
+mod tests {
+    use super::highest_priority_waiter;
+    use crate::compile_priority::CompilePriority;
+
+    #[test]
+    fn wakes_highest_priority_class_first() {
+        let critical = CompilePriority::Critical.index();
+        let interactive = CompilePriority::Interactive.index();
+        let background = CompilePriority::Background.index();
+
+        // No waiters -> nobody to wake.
+        assert_eq!(highest_priority_waiter(&[0, 0, 0]), None);
+        // Only background waiting.
+        assert_eq!(highest_priority_waiter(&[0, 0, 5]), Some(background));
+        // Interactive beats background.
+        assert_eq!(highest_priority_waiter(&[0, 3, 5]), Some(interactive));
+        // Critical beats everything.
+        assert_eq!(highest_priority_waiter(&[2, 3, 5]), Some(critical));
+    }
 }
