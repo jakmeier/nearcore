@@ -20,6 +20,7 @@ use crate::logic::errors::{CompilationError, VMRunnerError};
 use near_parameters::vm::LimitConfig;
 use parking_lot::{Condvar, Mutex};
 use std::array::from_fn;
+use std::env;
 use std::io::{Error as IoError, ErrorKind, Read, Write, stderr};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
@@ -71,13 +72,18 @@ impl DaemonProcess {
         // The compiler is fully configured through IPC. In particular it must
         // not inherit environment-based allocator, proxy, logging, or compiler
         // configuration from neard.
-        let mut child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .env_clear()
+            // Rayon determines its global compilation pool size from this
+            // variable. Keep this deliberate exception to the clean worker
+            // environment so operators can cap compiler parallelism.
+            .envs(env::var_os("RAYON_NUM_THREADS").map(|value| ("RAYON_NUM_THREADS", value)))
             .current_dir("/")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        let mut child = command.spawn()?;
         let stdin = child.stdin.take().unwrap();
         let mut stdout = child.stdout.take().unwrap();
         let child_stderr = child.stderr.take().unwrap();
