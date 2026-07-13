@@ -10,6 +10,8 @@ use near_parameters::vm::VMKind;
 use near_vm_runner::CompilePriority;
 use near_vm_runner::compiler_daemon;
 use near_vm_runner::logic::errors::CompilationError;
+#[cfg(feature = "test_features")]
+use near_vm_runner::logic::errors::VMRunnerError;
 use near_vm_runner::prepare;
 use std::sync::Arc;
 
@@ -27,6 +29,8 @@ fn main() {
     test_invalid_wasm();
     test_parallel_compilation();
     test_mixed_priority_compilation();
+    #[cfg(feature = "test_features")]
+    test_worker_crash_is_nondeterministic();
 }
 
 fn test_config() -> near_parameters::vm::Config {
@@ -60,7 +64,7 @@ fn test_basic_compilation() {
         &config.limit_config,
         CompilePriority::Critical,
     );
-    let compiled = result.unwrap();
+    let compiled = result.unwrap().unwrap();
     assert!(!compiled.is_empty());
 }
 
@@ -71,7 +75,7 @@ fn test_invalid_wasm() {
         &config.limit_config,
         CompilePriority::Critical,
     );
-    assert_matches!(result, Err(CompilationError::WasmtimeCompileError { .. }));
+    assert_matches!(result, Ok(Err(CompilationError::WasmtimeCompileError { .. })));
 }
 
 /// Hammer the daemon from many threads compiling a mix of distinct modules.
@@ -95,6 +99,7 @@ fn test_parallel_compilation() {
                 CompilePriority::Critical,
             )
             .unwrap()
+            .unwrap()
         })
         .collect();
     let prepared = Arc::new(prepared);
@@ -113,6 +118,7 @@ fn test_parallel_compilation() {
                         &config.limit_config,
                         CompilePriority::Critical,
                     )
+                    .unwrap()
                     .unwrap();
                     assert!(!compiled.is_empty());
                     // Daemon output must be deterministic regardless of which
@@ -154,6 +160,7 @@ fn test_mixed_priority_compilation() {
                     &config.limit_config,
                     priority,
                 )
+                .unwrap()
                 .unwrap();
                 assert!(!compiled.is_empty());
             })
@@ -162,4 +169,17 @@ fn test_mixed_priority_compilation() {
     for h in handles {
         h.join().unwrap();
     }
+}
+
+/// A worker crash is machine-local and must not be reported as a deterministic
+/// contract compilation error.
+#[cfg(feature = "test_features")]
+fn test_worker_crash_is_nondeterministic() {
+    let config = test_config();
+    let result = compiler_daemon::compile_in_subprocess(
+        compiler_daemon::protocol::TEST_ABORT_REQUEST,
+        &config.limit_config,
+        CompilePriority::Critical,
+    );
+    assert_matches!(result, Err(VMRunnerError::WasmCompilationUnknownError { .. }));
 }

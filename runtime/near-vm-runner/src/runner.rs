@@ -204,7 +204,7 @@ pub trait VM {
         &self,
         code: &ContractCode,
         cache: &dyn ContractRuntimeCache,
-    ) -> Result<Result<ContractPrecompilatonResult, CompilationError>, CacheError>;
+    ) -> Result<Result<ContractPrecompilatonResult, CompilationError>, VMRunnerError>;
 
     /// Like [`Self::precompile`], but returns `ContractAlreadyInCache`
     /// instead of blocking when another thread is already compiling the
@@ -214,7 +214,7 @@ pub trait VM {
         &self,
         code: &ContractCode,
         cache: &dyn ContractRuntimeCache,
-    ) -> Result<Result<ContractPrecompilatonResult, CompilationError>, CacheError>;
+    ) -> Result<Result<ContractPrecompilatonResult, CompilationError>, VMRunnerError>;
 }
 
 pub trait VMKindExt {

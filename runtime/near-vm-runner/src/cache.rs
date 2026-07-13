@@ -5,7 +5,7 @@ use crate::ContractCode;
 use crate::compile_priority::CompilePriority;
 use crate::errors::ContractPrecompilatonResult;
 use crate::logic::Config;
-use crate::logic::errors::{CacheError, CompilationError};
+use crate::logic::errors::{CompilationError, VMRunnerError};
 use crate::runner::VMKindExt;
 use borsh::{BorshDeserialize, BorshSerialize};
 use near_primitives_core::hash::CryptoHash;
@@ -1074,7 +1074,7 @@ pub fn precompile_contract(
     code: &ContractCode,
     config: Arc<Config>,
     cache: Option<&dyn ContractRuntimeCache>,
-) -> Result<Result<ContractPrecompilatonResult, CompilationError>, CacheError> {
+) -> Result<Result<ContractPrecompilatonResult, CompilationError>, VMRunnerError> {
     precompile_contract_with_priority(code, config, cache, CompilePriority::default())
 }
 
@@ -1086,7 +1086,7 @@ pub fn precompile_contract_with_priority(
     config: Arc<Config>,
     cache: Option<&dyn ContractRuntimeCache>,
     priority: CompilePriority,
-) -> Result<Result<ContractPrecompilatonResult, CompilationError>, CacheError> {
+) -> Result<Result<ContractPrecompilatonResult, CompilationError>, VMRunnerError> {
     let _span = tracing::debug_span!(target: "vm", "precompile_contract").entered();
     let vm_kind = config.vm_kind;
     let mut runtime = vm_kind
@@ -1111,7 +1111,7 @@ pub fn try_precompile_contract(
     code: &ContractCode,
     config: Arc<Config>,
     cache: Option<&dyn ContractRuntimeCache>,
-) -> Result<Result<ContractPrecompilatonResult, CompilationError>, CacheError> {
+) -> Result<Result<ContractPrecompilatonResult, CompilationError>, VMRunnerError> {
     try_precompile_contract_with_priority(code, config, cache, CompilePriority::default())
 }
 
@@ -1123,7 +1123,7 @@ pub fn try_precompile_contract_with_priority(
     config: Arc<Config>,
     cache: Option<&dyn ContractRuntimeCache>,
     priority: CompilePriority,
-) -> Result<Result<ContractPrecompilatonResult, CompilationError>, CacheError> {
+) -> Result<Result<ContractPrecompilatonResult, CompilationError>, VMRunnerError> {
     let _span = tracing::debug_span!(target: "vm", "try_precompile_contract").entered();
     let vm_kind = config.vm_kind;
     let mut runtime = vm_kind

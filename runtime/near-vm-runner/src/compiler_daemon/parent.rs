@@ -16,7 +16,7 @@ use crate::compiler_daemon::{
     DEFAULT_TOTAL_MEMORY_BUDGET_BYTES, MAX_POOL_SIZE, MAX_SPAWN_ATTEMPTS,
     MIN_WORKER_MEMORY_LIMIT_BYTES,
 };
-use crate::logic::errors::CompilationError;
+use crate::logic::errors::{CompilationError, VMRunnerError};
 use near_parameters::vm::LimitConfig;
 use parking_lot::{Condvar, Mutex};
 use std::array::from_fn;
@@ -266,13 +266,17 @@ fn get_or_init_pool() -> &'static DaemonPool {
 
 /// Compile prepared WASM code in an out-of-process daemon worker.
 ///
+/// The inner result contains deterministic contract compilation errors. The
+/// outer result contains machine-local worker failures which must not be
+/// cached as a property of the contract.
+///
 /// Blocks if all workers are busy, ordered by `priority`. Panics if no daemon
 /// binary has been configured via `set_daemon_binary`.
 pub fn compile_in_subprocess(
     prepared_code: &[u8],
     limit_config: &LimitConfig,
     priority: CompilePriority,
-) -> Result<Vec<u8>, CompilationError> {
+) -> Result<Result<Vec<u8>, CompilationError>, VMRunnerError> {
     let request = CompileRequest {
         prepared_code: prepared_code.to_vec(),
         max_memory_pages: limit_config.max_memory_pages,
@@ -296,12 +300,12 @@ pub fn compile_in_subprocess(
         match lease.worker.as_mut().unwrap().compile_raw(&request) {
             Ok(Ok(bytes)) => {
                 lease.checkin();
-                return Ok(bytes);
+                return Ok(Ok(bytes));
             }
             Ok(Err(msg)) => {
                 // Compilation error: the worker is healthy, not retryable.
                 lease.checkin();
-                return Err(CompilationError::WasmtimeCompileError { msg });
+                return Ok(Err(CompilationError::WasmtimeCompileError { msg }));
             }
             Err(ipc_err) => {
                 tracing::warn!(attempt, err = %ipc_err, "compiler daemon worker failed, respawning");
@@ -311,7 +315,7 @@ pub fn compile_in_subprocess(
         }
     }
     tracing::error!(attempts = MAX_SPAWN_ATTEMPTS, "compiler daemon failed, giving up");
-    Err(CompilationError::WasmtimeCompileError { msg: last_err })
+    Err(VMRunnerError::WasmCompilationUnknownError { debug_message: last_err })
 }
 
 // Maximum number of worker subprocesses ever spawned concurrently.

@@ -43,6 +43,11 @@ fn handle_compile(
     engines: &mut HashMap<u32, wasmtime::Engine>,
     request: CompileRequest,
 ) -> CompileResponse {
+    #[cfg(feature = "test_features")]
+    if request.prepared_code == super::protocol::TEST_ABORT_REQUEST {
+        std::process::abort();
+    }
+
     let engine = match engines.entry(request.max_memory_pages) {
         hash_map::Entry::Occupied(e) => e.into_mut(),
         hash_map::Entry::Vacant(e) => match create_compiler_engine(request.max_memory_pages) {

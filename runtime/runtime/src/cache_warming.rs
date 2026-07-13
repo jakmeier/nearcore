@@ -7,7 +7,7 @@ use crate::metrics::{
 use near_async::thread_pool::background_runtime_tasks;
 use near_parameters::vm::Config;
 use near_store::contract::ContractStorage;
-use near_vm_runner::logic::errors::{CacheError, CompilationError};
+use near_vm_runner::logic::errors::{CompilationError, VMRunnerError};
 use near_vm_runner::{
     CompilePriority, Contract as _, ContractCode, ContractPrecompilatonResult,
     ContractRuntimeCache, config_cache_key_signature, precompile_contract,
@@ -139,7 +139,7 @@ fn spawn_warming(
 /// Increment the compiles counter only on a fresh compile;
 /// `ContractAlreadyInCache` is intentionally not counted.
 fn update_compilation_cache_warming_metrics(
-    result: Result<Result<ContractPrecompilatonResult, CompilationError>, CacheError>,
+    result: Result<Result<ContractPrecompilatonResult, CompilationError>, VMRunnerError>,
 ) {
     match result {
         Ok(Ok(ContractPrecompilatonResult::ContractCompiled)) => {

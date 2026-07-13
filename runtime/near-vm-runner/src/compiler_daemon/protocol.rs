@@ -3,6 +3,11 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{Read, Write};
 
+/// Prepared-code payload that makes a test daemon abort, exercising the
+/// parent-side handling of machine-local compiler failures.
+#[cfg(feature = "test_features")]
+pub const TEST_ABORT_REQUEST: &[u8] = b"near-vm-runner compiler daemon test abort";
+
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct CompileRequest {
     pub prepared_code: Vec<u8>,
