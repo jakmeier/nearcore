@@ -32,8 +32,8 @@ static DAEMON_POOL_SIZE: OnceLock<usize> = OnceLock::new();
 static DAEMON_POOL: OnceLock<DaemonPool> = OnceLock::new();
 
 /// Set the path to the binary that should be spawned as the compiler daemon.
-/// In production, `neard` calls this with its own binary path at startup.
-/// In integration tests, point it at the test binary.
+/// In production, nearcore configures the dedicated daemon binary at startup.
+/// In integration tests, point it at the daemon binary Cargo builds for the test.
 /// Must be called at most once; subsequent calls are ignored.
 pub fn set_daemon_binary(path: PathBuf) {
     if DAEMON_BINARY.set(path).is_err() {
@@ -72,7 +72,6 @@ impl DaemonProcess {
         // not inherit environment-based allocator, proxy, logging, or compiler
         // configuration from neard.
         let mut child = Command::new(binary)
-            .arg("compile-wasm")
             .env_clear()
             .current_dir("/")
             .stdin(Stdio::piped())

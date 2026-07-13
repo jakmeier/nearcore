@@ -45,13 +45,6 @@ static DEFAULT_HOME: LazyLock<PathBuf> = LazyLock::new(get_default_home);
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> anyhow::Result<()> {
-    // Compiler workers must enter Landlock before the global rayon pool or any
-    // other helper threads are created.
-    // TODO: consider making the daemon an entirely separate binary to avoid changing main.rs.
-    if env::args_os().nth(1).is_some_and(|arg| arg == "compile-wasm") {
-        near_vm_runner::compiler_daemon::daemon_main();
-    }
-
     if env::var("RUST_BACKTRACE").is_err() {
         // Enable backtraces on panics by default.
         unsafe { env::set_var("RUST_BACKTRACE", "1") };

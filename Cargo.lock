@@ -5234,7 +5234,6 @@ dependencies = [
  "near-state-parts",
  "near-store",
  "near-undo-block",
- "near-vm-runner",
  "nearcore",
  "openssl-probe 0.1.5",
  "rayon",

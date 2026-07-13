@@ -1,9 +1,6 @@
 //! Integration test for the out-of-process compiler daemon.
 //!
-//! This binary serves double duty: when invoked with `compile-wasm` as the
-//! first argument, it acts as the daemon subprocess. Otherwise, it runs
-//! the tests. This lets us test the full subprocess flow (spawn, IPC,
-//! compilation) without a separate binary.
+//! The tests spawn the dedicated daemon binary Cargo builds for this package.
 
 use assert_matches::assert_matches;
 use near_parameters::vm::VMKind;
@@ -13,16 +10,15 @@ use near_vm_runner::logic::errors::CompilationError;
 #[cfg(feature = "test_features")]
 use near_vm_runner::logic::errors::VMRunnerError;
 use near_vm_runner::prepare;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 const TEST_POOL_SIZE: usize = 4;
 
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("compile-wasm") {
-        compiler_daemon::daemon_main();
-    }
-
-    compiler_daemon::set_daemon_binary(std::env::current_exe().unwrap());
+    compiler_daemon::set_daemon_binary(PathBuf::from(env!(
+        "CARGO_BIN_EXE_near-vm-compiler-daemon"
+    )));
     compiler_daemon::set_daemon_pool_size(TEST_POOL_SIZE);
 
     test_basic_compilation();

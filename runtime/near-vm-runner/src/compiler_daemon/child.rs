@@ -9,8 +9,7 @@ use super::sandbox::{self, SandboxStatus};
 use crate::wasmtime_runner::create_compiler_engine;
 use std::collections::{HashMap, hash_map};
 
-/// Entry point for the compiler daemon subprocess.
-/// Called when the binary is invoked with the `compile-wasm` argument.
+/// Entry point for the dedicated compiler daemon binary.
 pub fn daemon_main() -> ! {
     let stdout = std::io::stdout();
     let mut writer = stdout.lock();
