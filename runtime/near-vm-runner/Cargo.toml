@@ -58,6 +58,9 @@ near-schema-checker-lib.workspace = true
 
 bytesize.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+
 [dev-dependencies]
 arbitrary.workspace = true
 ark-bls12-381.workspace = true

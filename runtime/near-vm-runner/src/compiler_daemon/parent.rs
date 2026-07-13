@@ -10,7 +10,7 @@
 //! of background compilations (state sync, cache pre-warming, witness
 //! validation) from delaying latency-critical ones.
 
-use super::protocol::{CompileRequest, CompileResponse, read_frame, write_frame};
+use super::protocol::{CompileRequest, CompileResponse, DaemonStartup, read_frame, write_frame};
 use crate::compile_priority::CompilePriority;
 use crate::compiler_daemon::{
     DEFAULT_TOTAL_MEMORY_BUDGET_BYTES, MAX_POOL_SIZE, MAX_SPAWN_ATTEMPTS,
@@ -20,7 +20,7 @@ use crate::logic::errors::{CompilationError, VMRunnerError};
 use near_parameters::vm::LimitConfig;
 use parking_lot::{Condvar, Mutex};
 use std::array::from_fn;
-use std::io::{Read, Write, stderr};
+use std::io::{Error as IoError, ErrorKind, Read, Write, stderr};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::OnceLock;
@@ -80,7 +80,7 @@ impl DaemonProcess {
             .stderr(Stdio::piped())
             .spawn()?;
         let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
         let child_stderr = child.stderr.take().unwrap();
         let stderr_thread = match Builder::new()
             .name("compiler-daemon-stderr".to_owned())
@@ -93,6 +93,14 @@ impl DaemonProcess {
                 return Err(err);
             }
         };
+        if let Err(err) = wait_for_startup(&mut stdout) {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(stderr_thread) = stderr_thread {
+                let _ = stderr_thread.join();
+            }
+            return Err(err);
+        }
         Ok(Self { child, stdin, stdout, stderr_thread })
     }
 
@@ -117,6 +125,16 @@ impl DaemonProcess {
 
     fn is_alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+fn wait_for_startup(stdout: &mut ChildStdout) -> std::io::Result<()> {
+    let bytes = read_frame(stdout)?;
+    let startup: DaemonStartup = borsh::from_slice(&bytes)
+        .map_err(|err| IoError::new(ErrorKind::InvalidData, err.to_string()))?;
+    match startup {
+        DaemonStartup::Ready => Ok(()),
+        DaemonStartup::Err(err) => Err(IoError::new(ErrorKind::PermissionDenied, err)),
     }
 }
 

@@ -8,6 +8,19 @@ use std::io::{Read, Write};
 #[cfg(feature = "test_features")]
 pub const TEST_ABORT_REQUEST: &[u8] = b"near-vm-runner compiler daemon test abort";
 
+#[cfg(all(target_os = "linux", feature = "test_features"))]
+pub const TEST_LANDLOCK_PROBE_REQUEST: &[u8] = b"near-vm-runner compiler daemon landlock probe";
+
+#[cfg(all(target_os = "linux", feature = "test_features"))]
+pub const TEST_LANDLOCK_PROBE_RESPONSE: &[u8] =
+    b"near-vm-runner compiler daemon landlock probe passed";
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub enum DaemonStartup {
+    Ready,
+    Err(String),
+}
+
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct CompileRequest {
     pub prepared_code: Vec<u8>,

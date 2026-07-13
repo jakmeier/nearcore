@@ -26,6 +26,8 @@ fn main() {
     compiler_daemon::set_daemon_pool_size(TEST_POOL_SIZE);
 
     test_basic_compilation();
+    #[cfg(all(target_os = "linux", feature = "test_features"))]
+    test_landlock_sandbox();
     test_invalid_wasm();
     test_parallel_compilation();
     test_mixed_priority_compilation();
@@ -169,6 +171,22 @@ fn test_mixed_priority_compilation() {
     for h in handles {
         h.join().unwrap();
     }
+}
+
+/// Verify that a sandboxed worker cannot access filesystem paths and, on
+/// kernels supporting Landlock ABI v4, cannot bind a TCP socket. Successful
+/// compilation in the other tests proves that IPC and Wasmtime still work.
+#[cfg(all(target_os = "linux", feature = "test_features"))]
+fn test_landlock_sandbox() {
+    let config = test_config();
+    let result = compiler_daemon::compile_in_subprocess(
+        compiler_daemon::protocol::TEST_LANDLOCK_PROBE_REQUEST,
+        &config.limit_config,
+        CompilePriority::Critical,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(result, compiler_daemon::protocol::TEST_LANDLOCK_PROBE_RESPONSE);
 }
 
 /// A worker crash is machine-local and must not be reported as a deterministic

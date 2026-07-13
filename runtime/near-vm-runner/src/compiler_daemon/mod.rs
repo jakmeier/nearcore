@@ -11,6 +11,7 @@
 mod child;
 mod parent;
 pub mod protocol;
+mod sandbox;
 
 pub use child::daemon_main;
 pub use parent::{

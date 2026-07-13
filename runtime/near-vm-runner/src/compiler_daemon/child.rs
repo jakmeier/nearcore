@@ -4,19 +4,33 @@
 //! then loops reading compilation requests and writing responses.
 
 use super::MIN_WORKER_MEMORY_LIMIT_BYTES;
-use super::protocol::{CompileRequest, CompileResponse, read_frame, write_frame};
+use super::protocol::{CompileRequest, CompileResponse, DaemonStartup, read_frame, write_frame};
+use super::sandbox::{self, SandboxStatus};
 use crate::wasmtime_runner::create_compiler_engine;
 use std::collections::{HashMap, hash_map};
 
 /// Entry point for the compiler daemon subprocess.
 /// Called when the binary is invoked with the `compile-wasm` argument.
 pub fn daemon_main() -> ! {
+    let stdout = std::io::stdout();
+    let mut writer = stdout.lock();
+
     set_memory_limit();
+    let sandbox_status = match sandbox::apply() {
+        Ok(status) => status,
+        Err(err) => {
+            let startup = DaemonStartup::Err(err);
+            let _ = write_frame(&mut writer, &borsh::to_vec(&startup).unwrap());
+            std::process::exit(1);
+        }
+    };
+    let startup = DaemonStartup::Ready;
+    if write_frame(&mut writer, &borsh::to_vec(&startup).unwrap()).is_err() {
+        std::process::exit(1);
+    }
 
     let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
     let mut reader = stdin.lock();
-    let mut writer = stdout.lock();
     let mut engines: HashMap<u32, wasmtime::Engine> = HashMap::new();
 
     loop {
@@ -32,11 +46,27 @@ pub fn daemon_main() -> ! {
                 continue;
             }
         };
-        let response = handle_compile(&mut engines, request);
+        let response = handle_request(&mut engines, request, &sandbox_status);
         if write_frame(&mut writer, &borsh::to_vec(&response).unwrap()).is_err() {
             std::process::exit(0);
         }
     }
+}
+
+fn handle_request(
+    engines: &mut HashMap<u32, wasmtime::Engine>,
+    request: CompileRequest,
+    sandbox_status: &SandboxStatus,
+) -> CompileResponse {
+    #[cfg(all(target_os = "linux", feature = "test_features"))]
+    if request.prepared_code == super::protocol::TEST_LANDLOCK_PROBE_REQUEST {
+        return match sandbox::run_probe(sandbox_status) {
+            Ok(()) => CompileResponse::Ok(super::protocol::TEST_LANDLOCK_PROBE_RESPONSE.to_vec()),
+            Err(err) => CompileResponse::Err(err),
+        };
+    }
+    let _ = sandbox_status;
+    handle_compile(engines, request)
 }
 
 fn handle_compile(
