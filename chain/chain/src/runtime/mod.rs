@@ -12,7 +12,9 @@ use crate::types::{
     StatePartValidationResult, StateRootNodeValidationResult, StorageDataSource, Tip,
 };
 use errors::FromStateViewerErrors;
-use near_async::thread_pool::{background_runtime_tasks, contract_compilation_pool};
+use near_async::thread_pool::{
+    background_contract_compilation_pool, background_runtime_tasks, contract_compilation_pool,
+};
 use near_async::time::{Duration, Instant};
 use near_chain_configs::{GenesisConfig, MIN_GC_NUM_EPOCHS_TO_KEEP, ProtocolConfig};
 use near_crypto::{PublicKey, PublicKeyHandle};
@@ -56,7 +58,9 @@ use near_store::{
     TrieConfig, TrieUpdate, WrappedTrieChanges, get_access_key, get_gas_key_nonce,
 };
 use near_vm_runner::ContractCode;
-use near_vm_runner::{CompilePriority, ContractRuntimeCache, precompile_contract_with_priority};
+use near_vm_runner::{
+    CompilePriority, ContractRuntimeCache, compiler_daemon, precompile_contract_with_priority,
+};
 use node_runtime::adapter::ViewRuntimeAdapter;
 use node_runtime::cache_warming::cache_keys_differ;
 use node_runtime::config::tx_cost;
@@ -1639,22 +1643,17 @@ impl RuntimeAdapter for NightshadeRuntime {
         }
         let protocol_version = self.epoch_manager.get_epoch_protocol_version(epoch_id)?;
         let runtime_config = self.runtime_config_store.get_config(protocol_version);
+        let compilation_pool = if compiler_daemon::is_daemon_configured() {
+            background_contract_compilation_pool()
+        } else {
+            contract_compilation_pool()
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         for code in contract_codes {
             let tx = tx.clone();
             let config = Arc::clone(&runtime_config.wasm_config);
             let cache = self.compiled_contract_cache.handle();
-            contract_compilation_pool().spawn_boxed(Box::new(move || {
-                // TODO: With out-of-process compilation, the current
-                // parent-side pooling behaviour is not ideal.
-                //
-                // When the daemon is enabled, pool threads block on IPC rather
-                // than compute, and the parent pool's FIFO ordering can let
-                // Background precompiles queue ahead of Critical pipelining
-                // compiles, bypassing the daemon's CompilePriority at the
-                // parent level. The proper fix is a priority-aware parent pool
-                // (or routing background precompiles off this shared pool);
-                // deferred to a separate change.
+            compilation_pool.spawn_boxed(Box::new(move || {
                 precompile_contract_with_priority(
                     &code,
                     config,
