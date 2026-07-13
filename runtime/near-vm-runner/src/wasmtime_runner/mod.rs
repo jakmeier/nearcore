@@ -217,11 +217,25 @@ fn apply_compiler_config(config: &mut wasmtime::Config, max_memory_size: usize) 
 /// This is safe: the allocator only affects instantiation, not the
 /// serialized artifact produced by `precompile_module`.
 pub(crate) fn create_compiler_engine(max_memory_pages: u32) -> wasmtime::Result<Engine> {
+    create_compiler_engine_with_strategy(
+        max_memory_pages,
+        if cfg!(target_arch = "x86_64") { Strategy::Winch } else { Strategy::Cranelift },
+    )
+}
+
+/// Create a compiler-only engine with a specific Wasmtime compiler backend.
+/// This is used by the compiler-memory experiment; production uses
+/// [`create_compiler_engine`] to retain its platform-specific default.
+pub(crate) fn create_compiler_engine_with_strategy(
+    max_memory_pages: u32,
+    strategy: Strategy,
+) -> wasmtime::Result<Engine> {
     // `Config::from(WasmFeatures)` resolves to `Config::default()`, so the
     // daemon's feature set matches the in-process engine in `new_for_target`.
     let mut config = wasmtime::Config::default();
     let max_memory_size = guest_memory_size(max_memory_pages).unwrap_or(usize::MAX);
     apply_compiler_config(&mut config, max_memory_size);
+    config.strategy(strategy);
     Engine::new(&config)
 }
 

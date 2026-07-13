@@ -122,6 +122,11 @@ name = "near-vm-compiler-daemon"
 path = "src/bin/compiler_daemon.rs"
 required-features = ["wasmtime_vm"]
 
+[[bin]]
+name = "compile-experiment"
+path = "src/bin/compile_experiment.rs"
+required-features = ["wasmtime_vm"]
+
 [[test]]
 name = "compiler_daemon"
 harness = false

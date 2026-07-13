@@ -29,9 +29,28 @@ pub struct CompileRequest {
     pub max_elements_per_contract_table: Option<u64>,
 }
 
+/// Per-compilation diagnostic data reported by the worker alongside the artifact.
+///
+/// Measured inside the child process, so timing excludes IPC overhead.
+#[derive(BorshSerialize, BorshDeserialize, Default, Clone, Debug)]
+pub struct CompileStats {
+    /// Worker OS process ID.
+    pub pid: u32,
+    /// Zero-based index of this compile within the worker process lifetime.
+    /// 0 = first compile (fresh process), >0 = reused process.
+    pub compile_index_in_worker: u32,
+    /// Zero-based index of this compile for the engine that served it.
+    pub compile_index_in_engine: u32,
+    /// Whether a new wasmtime::Engine was created for this request
+    /// (as opposed to reusing a cached engine for the same `max_memory_pages`).
+    pub engine_created: bool,
+    /// Wall-clock time spent in `precompile_module`, in microseconds.
+    pub compile_duration_us: u64,
+}
+
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum CompileResponse {
-    Ok(Vec<u8>),
+    Ok { artifact: Vec<u8>, stats: CompileStats },
     Err(String),
 }
 

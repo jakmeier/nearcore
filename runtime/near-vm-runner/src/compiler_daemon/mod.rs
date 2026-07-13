@@ -9,6 +9,7 @@
 //! worker loop, and `protocol` for the IPC framing.
 
 mod child;
+pub mod experiment;
 mod parent;
 pub mod protocol;
 mod sandbox;

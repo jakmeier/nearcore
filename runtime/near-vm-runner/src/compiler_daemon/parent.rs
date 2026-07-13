@@ -123,7 +123,7 @@ impl DaemonProcess {
         let response: CompileResponse = borsh::from_slice(&response_bytes)
             .map_err(|e| format!("failed to deserialize response: {e}"))?;
         match response {
-            CompileResponse::Ok(bytes) => Ok(Ok(bytes)),
+            CompileResponse::Ok { artifact, .. } => Ok(Ok(artifact)),
             CompileResponse::Err(msg) => Ok(Err(msg)),
         }
     }
