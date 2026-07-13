@@ -20,10 +20,12 @@ use crate::logic::errors::{CompilationError, VMRunnerError};
 use near_parameters::vm::LimitConfig;
 use parking_lot::{Condvar, Mutex};
 use std::array::from_fn;
+use std::io::{Read, Write, stderr};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::OnceLock;
-use std::thread::available_parallelism;
+use std::thread::{Builder, JoinHandle, available_parallelism};
+use std::time::{Duration, Instant};
 
 static DAEMON_BINARY: OnceLock<PathBuf> = OnceLock::new();
 static DAEMON_POOL_SIZE: OnceLock<usize> = OnceLock::new();
@@ -61,19 +63,37 @@ struct DaemonProcess {
     child: Child,
     stdin: ChildStdin,
     stdout: ChildStdout,
+    stderr_thread: Option<JoinHandle<()>>,
 }
 
 impl DaemonProcess {
     fn spawn(binary: &Path) -> std::io::Result<Self> {
+        // The compiler is fully configured through IPC. In particular it must
+        // not inherit environment-based allocator, proxy, logging, or compiler
+        // configuration from neard.
         let mut child = Command::new(binary)
             .arg("compile-wasm")
+            .env_clear()
+            .current_dir("/")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()?;
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
-        Ok(Self { child, stdin, stdout })
+        let child_stderr = child.stderr.take().unwrap();
+        let stderr_thread = match Builder::new()
+            .name("compiler-daemon-stderr".to_owned())
+            .spawn(move || relay_stderr(child_stderr))
+        {
+            Ok(thread) => Some(thread),
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(err);
+            }
+        };
+        Ok(Self { child, stdin, stdout, stderr_thread })
     }
 
     /// Send a compilation request and read the response. Returns:
@@ -104,6 +124,49 @@ impl Drop for DaemonProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(stderr_thread) = self.stderr_thread.take() {
+            let _ = stderr_thread.join();
+        }
+    }
+}
+
+/// Drain worker stderr so it cannot block on a full pipe.
+///
+/// Limit the data sent to neard via stderr per time interval, discarding excess
+/// output, to avoid unbounded memory usage on neard.
+fn relay_stderr(mut child_stderr: ChildStderr) {
+    let stderr_relay_interval = Duration::from_secs(60);
+    let stderr_relay_limit_bytes = bytesize::kib(256u64);
+
+    let mut buffer = [0; 4096];
+    let mut interval_start = Instant::now();
+    let mut relayed = 0;
+    let mut rate_limit_reported = false;
+
+    loop {
+        let count = match child_stderr.read(&mut buffer) {
+            Ok(0) | Err(_) => return,
+            Ok(count) => count as u64,
+        };
+        if interval_start.elapsed() >= stderr_relay_interval {
+            interval_start = Instant::now();
+            relayed = 0;
+            rate_limit_reported = false;
+        }
+
+        let relay_count = count.min(stderr_relay_limit_bytes.saturating_sub(relayed));
+        if relay_count > 0 {
+            let mut parent_stderr = stderr().lock();
+            if parent_stderr.write_all(&buffer[..relay_count as usize]).is_err() {
+                return;
+            }
+            let _ = parent_stderr.flush();
+            relayed += relay_count;
+        }
+        if relay_count < count && !rate_limit_reported {
+            tracing::warn!("compiler daemon stderr rate limit exceeded");
+            rate_limit_reported = true;
+        }
     }
 }
 
@@ -172,7 +235,7 @@ impl DaemonPool {
         }
     }
 
-    fn wake_one(&self, inner: &mut PoolInner) {
+    fn wake_one(&self, inner: &PoolInner) {
         if let Some(idx) = highest_priority_waiter(&inner.waiters) {
             self.avail[idx].notify_one();
         }
