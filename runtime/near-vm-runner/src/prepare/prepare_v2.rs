@@ -1,3 +1,4 @@
+use super::prepare_v3::local_limit;
 use crate::logic::errors::PrepareError;
 use crate::{EXPORT_PREFIX, MEMORY_EXPORT};
 use finite_wasm::wasmparser as wp;
@@ -37,7 +38,7 @@ impl<'a> PrepareContext<'a> {
             // Practically reaching u64::MAX locals or functions is infeasible, so when the limit is not
             // specified, use that as a limit.
             function_limit: limits.max_functions_number_per_contract.unwrap_or(u64::MAX),
-            local_limit: limits.max_locals_per_contract.unwrap_or(u64::MAX),
+            local_limit: local_limit(code, config),
             table_limit: limits.max_tables_per_contract.unwrap_or(u32::MAX),
             table_element_limit,
             type_limit: limits.max_types_per_contract.unwrap_or(u64::MAX),
@@ -556,8 +557,10 @@ mod test {
             }
         }
         // Similarly, do the same for the number of locals.
-        if let Some(max_locals) = config.limit_config.max_locals_per_contract {
-            if local_count.ok_or(PrepareError::TooManyLocals)? > max_locals {
+        if config.limit_config.max_locals_per_contract.is_some()
+            || config.limit_config.min_contract_size_per_local.is_some()
+        {
+            if local_count.ok_or(PrepareError::TooManyLocals)? > local_limit(code, config) {
                 return Err(PrepareError::TooManyLocals);
             }
         }
